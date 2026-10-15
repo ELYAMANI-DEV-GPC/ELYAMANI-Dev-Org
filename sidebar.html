@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body { width: 100%; max-width: 100%; min-height: 100%; overflow-y: auto; font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #eee; padding: 16px; box-sizing: border-box; }
+    h1 { font-size: 16px; margin-bottom: 12px; color: #00d4ff; }
+    h2 { font-size: 13px; margin: 14px 0 8px; color: #00d4ff; border-bottom: 1px solid #333; padding-bottom: 4px; }
+    .section { margin-bottom: 10px; }
+    label { display: block; font-size: 12px; color: #aaa; margin-bottom: 4px; }
+    textarea { width: 100%; background: #16213e; border: 1px solid #333; color: #eee; padding: 8px; border-radius: 6px; font-size: 13px; resize: vertical; }
+    select, input { width: 100%; background: #16213e; border: 1px solid #333; color: #eee; padding: 7px; border-radius: 6px; font-size: 12px; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .row > div { flex: 1; }
+    button { width: 100%; padding: 10px; border: none; border-radius: 6px; font-size: 14px; font-weight: bold; cursor: pointer; margin-top: 8px; }
+    #startBtn { background: #00d4ff; color: #1a1a2e; }
+    #startBtn:hover { background: #00b8d9; }
+    #startBtn:disabled { background: #555; color: #888; cursor: not-allowed; }
+    #stopBtn { background: #ff4757; color: white; display: none; }
+    #configBtn { background: #2ed573; color: #1a1a2e; }
+    #configBtn:hover { background: #26b85e; }
+    #configBtn:disabled { background: #555; color: #888; cursor: not-allowed; }
+    #status { margin-top: 12px; font-size: 12px; color: #aaa; max-height: 150px; overflow-y: auto; }
+    .log-entry { padding: 2px 0; border-bottom: 1px solid #222; }
+    .log-success { color: #2ed573; }
+    .log-error { color: #ff4757; }
+    .log-info { color: #ffa502; }
+    .progress { margin-top: 8px; background: #16213e; border-radius: 6px; height: 6px; overflow: hidden; }
+    .progress-bar { height: 100%; background: #00d4ff; transition: width 0.3s; width: 0%; }
+    small { color: #666; font-size: 11px; }
+    .collapse-toggle { cursor: pointer; color: #00d4ff; font-size: 12px; margin-bottom: 6px; display: block; }
+    .collapse-content { display: none; }
+    .collapse-content.open { display: block; }
+    .update-results { margin-top: 8px; }
+    .update-result { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; border-bottom: 1px solid #333; }
+    .update-result > input, .update-approval > input { width: auto; flex: none; margin-top: 2px; }
+    .update-result > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .update-result strong { display: block; font-size: 12px; font-weight: 600; }
+    .update-result a { color: #00d4ff; font-size: 11px; overflow-wrap: anywhere; }
+    .update-detail { font-size: 11px; color: #aaa; margin-top: 3px; white-space: pre-wrap; }
+    .update-approval { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; }
+    .update-actions { display: flex; gap: 8px; }
+    .update-actions button { flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+    #launchUpdatesBtn { background: #2ed573; color: #1a1a2e; }
+    #analyzeUpdatesBtn { background: #00d4ff; color: #1a1a2e; }
+    #stopUpdatesBtn { background: #ff4757; color: white; }
+    #launchUpdatesBtn:disabled, #analyzeUpdatesBtn:disabled { background: #555; color: #aaa; cursor: not-allowed; }
+    #updatesLog { max-height: 180px; overflow-y: auto; font-size: 11px; overflow-wrap: anywhere; margin-top: 8px; }
+    [hidden] { display: none !important; }
+    .workspace-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-bottom: 16px; }
+    .workspace-tab { margin: 0; padding: 6px 4px; height: 38px; min-width: 0; font-size: 12px; background: #16213e; color: #bbb; border: 1px solid #333; border-radius: 4px; }
+    .workspace-tab[aria-selected="true"] { background: #00d4ff; color: #1a1a2e; border-color: #00d4ff; }
+    .workspace-tab:focus-visible, summary:focus-visible { outline: 2px solid #00d4ff; outline-offset: 2px; }
+    .workspace-panel { min-width: 0; }
+    .workspace-panel > h2:first-child { margin-top: 0; }
+    .row > div { min-width: 0; }
+    input[type="checkbox"] { width: auto; flex: none; }
+    details { margin: 10px 0; }
+    summary { cursor: pointer; color: #bbb; font-size: 12px; padding: 6px 0; }
+    .update-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; list-style: none; margin: 10px 0 14px; }
+    .update-steps li { border-bottom: 2px solid #333; padding: 6px 0; font-size: 11px; color: #aaa; overflow-wrap: anywhere; }
+    .update-steps li[aria-current="step"] { border-color: #00d4ff; color: #00d4ff; }
+    .connection-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 11px; color: #aaa; }
+    .connection-bar > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .connection-bar button { width: auto; margin: 0; padding: 5px 8px; font-size: 11px; background: #16213e; color: #00d4ff; border: 1px solid #333; }
+    #updatesNotice, #updateReviewSummary { font-size: 12px; margin-top: 10px; overflow-wrap: anywhere; }
+    #updateReviewSummary { color: #aaa; }
+    .update-result details { margin: 3px 0 0; }
+    .history-entry { padding: 10px 0; border-bottom: 1px solid #333; overflow-wrap: anywhere; }
+    .history-entry strong { font-size: 12px; display: block; }
+    .history-entry a { color: #00d4ff; font-size: 11px; }
+    .panel-toolbar { display: flex; align-items: center; gap: 8px; }
+    .panel-toolbar h2 { flex: 1; margin: 0; }
+    .panel-toolbar button { width: auto; margin: 0; padding: 6px 8px; font-size: 11px; background: #16213e; color: #00d4ff; border: 1px solid #333; }
+    #historyStatus { margin: 8px 0; font-size: 11px; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h1>Play Console</h1>
+  <nav class="workspace-tabs" role="tablist" aria-label="Workspace">
+    <button type="button" class="workspace-tab" id="updatesTab" role="tab" aria-controls="updatesPanel" aria-selected="true" data-view="updates">Updates</button>
+    <button type="button" class="workspace-tab" id="createTab" role="tab" aria-controls="createPanel" aria-selected="false" tabindex="-1" data-view="create">Create</button>
+    <button type="button" class="workspace-tab" id="historyTab" role="tab" aria-controls="historyPanel" aria-selected="false" tabindex="-1" data-view="history">History</button>
+    <button type="button" class="workspace-tab" id="settingsTab" role="tab" aria-controls="settingsPanel" aria-selected="false" tabindex="-1" data-view="settings">Settings</button>
+  </nav>
+  <section id="updatesPanel" class="workspace-panel" role="tabpanel" aria-labelledby="updatesTab">
+    <div class="connection-bar"><span id="updatesConnectionStatus">GitHub not connected</span><button type="button" id="openUpdateSettingsBtn">Settings</button></div>
+    <div id="updatesHost"></div>
+  </section>
+  <section id="createPanel" class="workspace-panel" role="tabpanel" aria-labelledby="createTab" hidden>
+
+  <div class="section">
+    <label>Apps: name|package (one per line)</label>
+    <textarea id="appNames" style="height:100px" placeholder="My App 1|com.example.app1&#10;My App 2|com.example.app2&#10;My App 3">Watch Movies</textarea>
+    <small>Package name is optional. If omitted, a random unique package name is generated.</small>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Default Language</label>
+      <select id="language">
+        <option value="en-US" selected>English (US)</option>
+        <option value="fr-FR">French</option>
+        <option value="es-ES">Spanish</option>
+        <option value="de-DE">German</option>
+        <option value="ar">Arabic</option>
+      </select>
+    </div>
+    <div>
+      <label>App / Game</label>
+      <select id="appType">
+        <option value="app" selected>Application</option>
+        <option value="game">Game</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Free / Paid</label>
+      <select id="pricing">
+        <option value="free" selected>Free</option>
+        <option value="paid">Paid</option>
+      </select>
+    </div>
+    <div>
+      <label>Delay between apps (sec)</label>
+      <input type="number" id="delay" value="3" min="3" max="60">
+    </div>
+  </div>
+
+  <div class="row" style="align-items:center;margin-bottom:4px">
+    <div style="flex:2"><button id="startBtn">🚀 Create Drafts</button></div>
+    <div style="flex:3;display:flex;align-items:center;gap:6px;padding-top:8px">
+      <input type="checkbox" id="autoConfig" checked>
+      <label for="autoConfig" style="display:inline;color:#ffa502;font-size:11px;cursor:pointer">Auto-configure after creation</label>
+    </div>
+  </div>
+
+  <div class="row" style="align-items:center;margin-bottom:4px">
+    <div style="flex:1;display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="autoBuild" checked>
+      <label for="autoBuild" style="display:inline;color:#7C4DFF;font-size:11px;cursor:pointer">🚀 Auto GitHub Build after creation (Flutter Play upload follows the option below)</label>
+    </div>
+  </div>
+
+  <!-- App Configuration Section -->
+  <h2>⚙️ App Configuration</h2>
+  <span class="collapse-toggle" id="configToggle">▶ Show config fields</span>
+  <div class="collapse-content" id="configSection">
+
+    <!-- AI API Key -->
+    <div class="section">
+      <label>🤖 Gemini API Key (optional — manual AI copy generation)</label>
+      <input type="password" id="geminiApiKey" placeholder="AIza...">
+      <small>Bulk listing defaults use existing repository text and do not need Gemini. <a href="https://aistudio.google.com/apikey" target="_blank">Get a Gemini API key</a>.</small>
+    </div>
+
+    <!-- Privacy Policy -->
+    <div class="section">
+      <label>Privacy Policy URL</label>
+      <input type="text" id="privacyUrl" value="" placeholder="Auto-generated via GitHub Pages if checkbox enabled">
+      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+        <input type="checkbox" id="autoPrivacyPolicy" checked>
+        <label for="autoPrivacyPolicy" style="display:inline;color:#2ed573;font-size:11px;cursor:pointer">📜 Auto-generate privacy policy per app (pushed to branch, hosted via GitHub Pages)</label>
+      </div>
+      <small>If checked, a unique privacy policy HTML is generated & pushed to each branch. The URL above is used as fallback.</small>
+    </div>
+
+    <!-- App Access -->
+    <div class="section">
+      <label>Sign in details / App Access</label>
+      <select id="appAccess">
+        <option value="all" selected>All functionality available without restrictions</option>
+        <option value="restricted">Restricted (login required, etc.)</option>
+      </select>
+    </div>
+
+    <!-- Ads -->
+    <div class="row">
+      <div>
+        <label>Contains Ads?</label>
+        <select id="containsAds">
+          <option value="yes">Yes</option>
+          <option value="no" selected>No</option>
+        </select>
+      </div>
+      <div>
+        <label>Government App?</label>
+        <select id="govApp">
+          <option value="no" selected>No</option>
+          <option value="yes">Yes</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Target Audience -->
+    <div class="row">
+      <div>
+        <label>Target Age</label>
+        <select id="targetAge">
+          <option value="13+" selected>13+ and older</option>
+          <option value="16+">16+ and older</option>
+          <option value="18+">18+ only</option>
+        </select>
+      </div>
+      <div>
+        <label>Financial Features?</label>
+        <select id="financialFeatures">
+          <option value="no" selected>No</option>
+          <option value="yes">Yes</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Health App?</label>
+        <select id="healthApp">
+          <option value="no" selected>No</option>
+          <option value="yes">Yes</option>
+        </select>
+      </div>
+      <div>
+        <label>Data Shared?</label>
+        <select id="dataShared">
+          <option value="no" selected>No data shared</option>
+          <option value="yes">Shares data</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Data Safety CSV -->
+    <div class="section">
+      <label>Data Safety CSV (for import)</label>
+      <input type="file" id="dataSafetyCsv" accept=".csv" style="font-size:11px;padding:4px">
+      <small>Export from Play Console, modify, then import here</small>
+    </div>
+
+    <!-- Content Rating -->
+    <div class="section">
+      <label>Content Rating — Violence?</label>
+      <select id="crViolence">
+        <option value="no" selected>No</option>
+        <option value="mild">Mild</option>
+        <option value="moderate">Moderate</option>
+      </select>
+    </div>
+
+    <!-- Category & Contact -->
+    <h2>📋 Category & Contact</h2>
+    <div class="row">
+      <div>
+        <label>Category</label>
+        <select id="appCategory">
+          <option value="TOOLS">Outils / Tools</option>
+          <option value="ENTERTAINMENT" selected>Divertissement / Entertainment</option>
+          <option value="PRODUCTIVITY">Productivité / Productivity</option>
+          <option value="LIFESTYLE">Art de vivre / Lifestyle</option>
+          <option value="EDUCATION">Enseignement / Education</option>
+          <option value="COMMUNICATION">Communication</option>
+          <option value="PERSONALIZATION">Personnalisation / Personalization</option>
+          <option value="NEWS_AND_MAGAZINES">Actualités et magazines</option>
+          <option value="FOOD_AND_DRINK">Alimentation et boissons</option>
+          <option value="ART_AND_DESIGN">Art et design</option>
+          <option value="AUTO_AND_VEHICLES">Auto et véhicules</option>
+          <option value="BEAUTY">Beauté / Beauty</option>
+          <option value="BOOKS_AND_REFERENCE">Bibliothèques et démos</option>
+          <option value="BUSINESS">Professionnel / Business</option>
+          <option value="COMICS">Bandes dessinées / Comics</option>
+          <option value="MAPS_AND_NAVIGATION">Cartes et navigation</option>
+          <option value="FINANCE">Finance</option>
+          <option value="HEALTH_AND_FITNESS">Santé et remise en forme</option>
+          <option value="MEDICAL">Médecine / Medical</option>
+          <option value="MUSIC_AND_AUDIO">Musique et audio</option>
+          <option value="PHOTOGRAPHY">Photographie / Photography</option>
+          <option value="SHOPPING">Shopping / Achats</option>
+          <option value="SOCIAL">Réseaux sociaux / Social</option>
+          <option value="SPORTS">Sports</option>
+          <option value="TRAVEL_AND_LOCAL">Voyages et infos locales</option>
+          <option value="WEATHER">Météo / Weather</option>
+          <option value="GAME_CASUAL">Jeu: Casual</option>
+          <option value="GAME_PUZZLE">Jeu: Puzzle / Réflexion</option>
+          <option value="GAME_ACTION">Jeu: Action</option>
+        </select>
+      </div>
+      <div>
+        <label>Contact Email</label>
+        <input type="text" id="contactEmail" placeholder="Fetched automatically from Play Console">
+        <button id="fetchDevEmailBtn" style="width:auto;margin-top:4px;padding:3px 8px;background:#16213e;border:1px solid #333;color:#00d4ff;font-size:11px;cursor:pointer;border-radius:4px" title="Fetch developer email from Play Console account">📧 Fetch from Play Console</button>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Contact Phone</label>
+        <input type="text" id="contactPhone" value="+33000000000" placeholder="+33612345678">
+      </div>
+      <div>
+        <label>Website URL</label>
+        <input type="text" id="websiteUrl" placeholder="https://example.com">
+      </div>
+    </div>
+
+    <!-- Store Listing -->
+    <h2>🏪 Store Listing</h2>
+    <div class="section">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <label style="margin:0;flex:1">Short Description (80 chars max)</label>
+        <span id="shortDescCount" style="font-size:11px;color:#666">0/80</span>
+      </div>
+      <input type="text" id="shortDesc" maxlength="80" value="Watch movie trailers and discover your next favorite film.">
+    </div>
+    <div class="section">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <label style="margin:0;flex:1">Full Description (4000 chars max)</label>
+        <span id="fullDescCount" style="font-size:11px;color:#666">0/4000</span>
+      </div>
+      <textarea id="fullDesc" maxlength="4000" style="height:70px">Watch Movies helps you discover movie trailers, explore popular films, and find your next favorite movie. Browse a simple catalog of entertainment content without requiring an account or sign-in.</textarea>
+    </div>
+    <button id="generateDescBtn" style="background:#9b59b6;color:white;margin-bottom:8px" title="Uses Gemini AI to generate Play Store descriptions">✨ Generate Descriptions with AI</button>
+    <button id="generateListingDefaultsBtn" type="button" style="background:#263238;color:white;margin-bottom:6px">Prepare listing defaults for Android repositories</button>
+    <small id="listingDefaultsStatus" style="display:block;margin-bottom:8px;color:#888">Creates docs/play_listing_defaults.json from existing listing text and records screenshot sources.</small>
+    <div class="section">
+      <label>Google Drive Icon URL (512x512 PNG)</label>
+      <input type="text" id="driveIconUrl" placeholder="https://drive.google.com/file/d/.../view">
+      <small>Direct Google Drive sharing link for app icon</small>
+    </div>
+    <div class="section">
+      <label>Google Drive Screenshot URL</label>
+      <input type="text" id="driveScreenshotUrl" placeholder="https://drive.google.com/file/d/.../view">
+      <small>Direct Google Drive sharing link for screenshot (at least 1 required)</small>
+    </div>
+
+  </div>
+
+  <!-- GitHub Build & Publish Section -->
+  <h2>🚀 Build & Publish (GitHub Actions)</h2>
+  <span class="collapse-toggle" id="buildToggle">▶ Show build settings</span>
+  <div class="collapse-content" id="buildSection">
+    <div id="connectionSettings">
+    <h2>GitHub connection</h2>
+    <div class="section">
+      <label for="ghToken">GitHub Token</label>
+      <input type="password" id="ghToken" placeholder="ghp_...">
+    </div>
+    <div class="row">
+      <div>
+        <label>Repository (owner/repo)</label>
+        <select id="ghRepo" style="width:100%;padding:6px;border-radius:4px;border:1px solid #ccc">
+          <option value="GPC-Shared/68d9d0fa1299230338c8563a" selected>GPC-Shared/68d9d0fa1299230338c8563a 🔒</option>
+        </select>
+        <input type="text" id="ghRepoManual" placeholder="or type owner/repo" style="margin-top:4px;font-size:11px;width:100%;padding:4px;border-radius:4px;border:1px solid #ddd;color:#666">
+      </div>
+      <div>
+        <label>Branch <small style="color:#888">(= package name)</small></label>
+        <input type="text" id="ghBranch" placeholder="auto from package" readonly style="background:#f5f5f5;color:#666">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Base Branch (for new branches)</label>
+        <select id="ghBaseBranch" style="width:100%;padding:6px;border-radius:4px;border:1px solid #ccc">
+          <option value="com.movies.tvmovies" selected>com.movies.tvmovies</option>
+        </select>
+      </div>
+    </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Workflow</label>
+        <select id="ghWorkflow">
+          <option value="setup-variant.yml" selected>🆕 Setup New Variant</option>
+          <option value="build.yml">🔨 Build Signed Release</option>
+          <option value="flutter-build.yml">📱 Build Flutter Android AAB</option>
+          <option value="publish-app.yml">📦 Publish New App</option>
+        </select>
+      </div>
+      <div>
+        <label>Track (publish-app only)</label>
+        <select id="ghTrack">
+          <option value="beta" selected>Beta (Open Testing)</option>
+          <option value="production">Production</option>
+          <option value="alpha">Alpha (Closed)</option>
+          <option value="internal">Internal</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Variant Setup Fields -->
+    <div id="variantFields">
+      <div class="row">
+        <div>
+          <label>Primary Color</label>
+          <input type="text" id="ghPrimaryColor" value="#8BC34A" placeholder="#8BC34A">
+        </div>
+        <div>
+          <label>Secondary / Dark Color</label>
+          <input type="text" id="ghDarkColor" value="#558B2F" placeholder="#558B2F">
+        </div>
+        <div>
+          <label>Accent / Icon Background</label>
+          <input type="text" id="ghIconBg" value="#1565C0" placeholder="#1565C0">
+        </div>
+      </div>
+      <small style="display:block;margin-bottom:8px">Setup creates branch, changes applicationId, app name, logo, theme, listing from the fields above</small>
+      <div class="section">
+        <label>🎨 App Logo (512x512 PNG, optional)</label>
+        <input type="file" id="ghAppLogo" accept="image/png,image/jpeg,image/webp" style="font-size:11px;padding:4px">
+        <div id="logoPreview" style="display:none;margin-top:6px"><img id="logoPreviewImg" style="width:64px;height:64px;border-radius:8px;border:1px solid #333"></div>
+        <small>Optional; a matching icon is generated automatically if omitted</small>
+        <label style="display:block;margin-top:8px">Play Store Phone Screenshots (up to 8)</label>
+        <input type="file" id="ghPlayScreenshots" accept="image/png,image/jpeg" multiple style="font-size:11px;padding:4px">
+        <small id="playScreenshotsStatus">Optional; Flutter builds use docs/screens when no screenshots are uploaded</small>
+      </div>
+    </div>
+
+    <div class="section">
+      <label style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="publishFlutterPlay">
+        Upload listing and AAB to Google Play as a draft
+      </label>
+      <small>Requires the PLAY_STORE_JSON_KEY Actions secret and an app already created in Play Console.</small>
+    </div>
+
+    <button id="inspectProjectBtn" type="button" style="background:#263238;color:white;margin-bottom:6px">🔎 Analyze selected project</button>
+    <pre id="projectInspection" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#111;padding:8px;border-radius:4px;font-size:11px;color:#ddd"></pre>
+    <button id="buildBtn" style="background:#7C4DFF;color:white">🚀 Setup + Build + Publish</button>
+    <div id="buildStatus" style="margin-top:8px;font-size:12px;color:#aaa"></div>
+
+    <div id="existingUpdatesSection">
+    <h2>Update Existing Apps</h2>
+    <ol class="update-steps" aria-label="Update progress">
+      <li id="updateSelectStep" aria-current="step">1. Select</li>
+      <li id="updateVerifyStep">2. Verify</li>
+      <li id="updateLaunchStep">3. Launch</li>
+    </ol>
+    <div class="section">
+      <label for="updatePackages">Android packages</label>
+      <textarea id="updatePackages" rows="4" spellcheck="false" placeholder="com.zvwipesnpmps.doriac_cecile&#10;com.example.app"></textarea>
+    </div>
+    <button id="analyzeUpdatesBtn" type="button">Analyze packages</button>
+    <div id="updatesNotice" role="status" aria-live="polite"></div>
+    <div id="updateReviewSummary"></div>
+    <div id="updateResults" class="update-results"></div>
+    <div id="updateConfirmation" hidden>
+    <label class="update-approval" for="approveUpdates">
+      <input type="checkbox" id="approveUpdates" disabled>
+      Approve selected package/launcher/workflow repairs and open-testing draft uploads
+    </label>
+    <div class="update-actions">
+      <button id="launchUpdatesBtn" type="button" disabled>Confirm and launch</button>
+      <button id="stopUpdatesBtn" type="button" hidden>Stop queue</button>
+    </div>
+    </div>
+    <details id="updatesLogDetails"><summary>Activity details</summary><div id="updatesLog" role="status" aria-live="polite"></div></details>
+    </div>
+
+    <!-- Signing / Keystore Upload -->
+    <div id="signingSettings">
+    <h2 style="margin-top:14px">🔐 Signing Keystore</h2>
+    <div id="keystoreSecretsStatus" style="margin-bottom:8px;font-size:11px;color:#aaa">Checking secrets...</div>
+    <small style="display:block;margin-bottom:8px">Upload only needed for first setup or to change signing key. If secrets already exist, just trigger Build.</small>
+    <div class="section">
+      <label>Keystore File (.jks)</label>
+      <input type="file" id="jksFile" accept=".jks,.keystore" style="font-size:11px;padding:4px">
+    </div>
+    <div class="row">
+      <div>
+        <label>Key Alias</label>
+        <input type="text" id="jksKeyAlias" value="key0" placeholder="key0">
+      </div>
+      <div>
+        <label>Key Password</label>
+        <input type="password" id="jksKeyPassword" placeholder="password">
+      </div>
+    </div>
+    <div class="section">
+      <label>Keystore Password</label>
+      <input type="password" id="jksStorePassword" placeholder="password">
+    </div>
+    <button id="uploadKeystoreBtn" style="background:#ff9800;color:#1a1a2e">🔑 Upload Keystore Secrets to GitHub</button>
+    <div id="keystoreStatus" style="margin-top:8px;font-size:12px;color:#aaa"></div>
+    </div>
+  </div>
+
+  <button id="configBtn" style="display:none">⚙️ Configure Existing Apps</button>
+  <button id="stopBtn">⛔ Stop</button>
+
+  <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+  <div id="status"></div>
+  </section>
+  <section id="historyPanel" class="workspace-panel" role="tabpanel" aria-labelledby="historyTab" hidden>
+    <div class="panel-toolbar"><h2>Build history</h2><button id="refreshHistoryBtn" type="button">Refresh</button></div>
+    <div id="historyStatus" role="status" aria-live="polite"></div>
+    <div id="historyList"></div>
+    <details id="historyLogsDetails"><summary>Build logs</summary><div id="historyLogsHost"></div></details>
+  </section>
+  <section id="settingsPanel" class="workspace-panel" role="tabpanel" aria-labelledby="settingsTab" hidden>
+    <div id="settingsConnectionHost"></div>
+    <details id="signingDetails"><summary>Android signing</summary><div id="settingsSigningHost"></div></details>
+  </section>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>
