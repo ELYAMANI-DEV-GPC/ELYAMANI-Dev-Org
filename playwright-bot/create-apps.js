@@ -438,7 +438,40 @@ function fillAndSubmitForm(appName, packageName, appType, pricing, debug) {
 
 // ============================================================
 // GitHub workflow dispatch (flutter-build.yml) with random colors
+// Uses Node's https module — more reliable than global fetch while
+// a Chromium browser holds many sockets open.
 // ============================================================
+function httpsPostJson(url, token, payload) {
+  const https = require('https');
+  const data = JSON.stringify(payload);
+  const u = new URL(url);
+  const options = {
+    hostname: u.hostname,
+    path: u.pathname + u.search,
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'play-console-bot',
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data)
+    },
+    timeout: 30000
+  };
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
 async function dispatchFlutterBuild(appName, pkg) {
   if (!CONFIG.ghToken || !CONFIG.ghRepo) return null;
 
@@ -456,21 +489,12 @@ async function dispatchFlutterBuild(appName, pkg) {
     }
   };
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${CONFIG.ghToken}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28'
-    },
-    body: JSON.stringify(body)
-  });
+  const res = await httpsPostJson(url, CONFIG.ghToken, body);
 
   if (res.status === 204) {
     return { requestId, colors };
   }
-  const text = await res.text();
-  throw new Error(`GitHub dispatch failed (${res.status}): ${text.substring(0, 200)}`);
+  throw new Error(`GitHub dispatch failed (${res.status}): ${String(res.body).substring(0, 200)}`);
 }
 
 // ============================================================
