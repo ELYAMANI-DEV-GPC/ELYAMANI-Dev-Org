@@ -1,0 +1,5 @@
+node_modules/
+play-console-auth.json
+apps.txt
+*.png
+!apps.example.txt

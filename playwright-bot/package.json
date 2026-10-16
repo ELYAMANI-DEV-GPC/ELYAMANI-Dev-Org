@@ -1,0 +1,14 @@
+{
+  "name": "play-console-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless Playwright automation for Play Console app draft creation",
+  "scripts": {
+    "setup": "npx playwright install chromium",
+    "login": "node save-session.js",
+    "run": "node create-apps.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

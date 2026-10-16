@@ -1,0 +1,70 @@
+name: Auto Create Play Console Apps
+
+# Runs the headless Playwright bot on a schedule.
+# IMPORTANT: requires a SELF-HOSTED runner (e.g. your Mac) because the bot
+# needs the Play Console session cookies. Never run this on GitHub-hosted
+# runners with real credentials.
+#
+# Required secrets (repo Settings → Secrets and variables → Actions):
+#   PLAY_CONSOLE_AUTH_B64  — base64 of playwright-bot/play-console-auth.json
+#                            (generate: base64 -i playwright-bot/play-console-auth.json | pbcopy)
+#   GH_PAT                 — GitHub PAT with workflow scope (for build dispatch)
+#
+# Variables (Settings → Variables):
+#   PLAY_CONSOLE_DEV_ID    — Play Console developer account ID
+#   BUILD_REPO             — owner/repo where flutter-build.yml lives
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # every day at 06:00 UTC
+  workflow_dispatch:      # manual trigger from the Actions tab
+
+permissions: {}
+
+jobs:
+  create-apps:
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: playwright-bot
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore Play Console session
+        run: |
+          echo "${{ secrets.PLAY_CONSOLE_AUTH_B64 }}" | base64 --decode > play-console-auth.json
+          chmod 600 play-console-auth.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium (cached after first run)
+        run: npx playwright install chromium
+
+      - name: Run app creation bot
+        env:
+          DEV_ID: ${{ vars.PLAY_CONSOLE_DEV_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_REPO: ${{ vars.BUILD_REPO }}
+          TRACK: internal
+          PUBLISH_TO_PLAY: 'false'
+          UPLOAD_LISTING: 'false'
+          DELAY_SEC: '10'
+        run: node create-apps.js
+
+      - name: Re-save refreshed session cookies
+        if: always()
+        run: |
+          if [ -f play-console-auth.json ]; then
+            echo "::notice::Cookies refreshed — update the PLAY_CONSOLE_AUTH_B64 secret if the next run fails."
+          fi
+
+      - name: Upload error screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-error-screenshots
+          path: playwright-bot/error-*.png
+          if-no-files-found: ignore
+          retention-days: 7

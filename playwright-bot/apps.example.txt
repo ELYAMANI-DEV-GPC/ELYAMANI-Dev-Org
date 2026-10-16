@@ -1,0 +1,6 @@
+# One app per line: Name|com.optional.package
+# Package is optional — a random unique one is generated if omitted.
+# Lines starting with # are ignored.
+
+Watch Movies|
+Movie Trailers Hub|com.example.trailershub
