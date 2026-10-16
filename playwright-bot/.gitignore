@@ -1,5 +1,6 @@
 node_modules/
 play-console-auth.json
+chrome-bot-profile/
 apps.txt
 *.png
 !apps.example.txt

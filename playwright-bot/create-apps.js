@@ -22,7 +22,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { chromium } = require('playwright');
 
-const AUTH_FILE = path.join(__dirname, 'play-console-auth.json');
+const PROFILE_DIR = path.join(__dirname, 'chrome-bot-profile');
 const APPS_FILE = path.join(__dirname, 'apps.txt');
 
 const CONFIG = {
@@ -481,8 +481,8 @@ async function dispatchFlutterBuild(appName, pkg) {
     console.error('❌ DEV_ID manquant. Ex: DEV_ID=1234567890123456789 node create-apps.js');
     process.exit(1);
   }
-  if (!fs.existsSync(AUTH_FILE)) {
-    console.error('❌ play-console-auth.json introuvable. Lancez d\'abord: npm run login');
+  if (!fs.existsSync(PROFILE_DIR)) {
+    console.error('❌ Profil chrome-bot-profile/ introuvable. Lancez d\'abord: npm run login');
     process.exit(1);
   }
 
@@ -494,13 +494,16 @@ async function dispatchFlutterBuild(appName, pkg) {
 
   console.log(`🤖 ${apps.length} app(s) dans la file. Headless: ${CONFIG.headless}`);
 
-  const browser = await chromium.launch({ headless: CONFIG.headless });
-  const context = await browser.newContext({
-    storageState: AUTH_FILE,
+  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+    headless: CONFIG.headless,
+    channel: 'chrome',
     viewport: { width: 1280, height: 900 },
-    locale: 'en-US'
+    locale: 'en-US',
+    args: ['--disable-blink-features=AutomationControlled']
   });
-  const page = await context.newPage();
+  // Inject the form-filling function into every page before scripts run
+  await context.addInitScript(`window.fillAndSubmitForm = ${fillAndSubmitForm.toString()};`);
+  const page = context.pages()[0] || await context.newPage();
   page.setDefaultTimeout(60000);
 
   let created = 0;
@@ -521,7 +524,10 @@ async function dispatchFlutterBuild(appName, pkg) {
         break;
       }
 
-      const result = await page.evaluate(fillAndSubmitForm, name, pkg, CONFIG.appType, CONFIG.pricing, false);
+      const result = await page.evaluate(
+        ({ name, pkg, appType, pricing }) => window.fillAndSubmitForm(name, pkg, appType, pricing, false),
+        { name, pkg, appType: CONFIG.appType, pricing: CONFIG.pricing }
+      );
 
       if (result === true) {
         created++;
@@ -554,9 +560,8 @@ async function dispatchFlutterBuild(appName, pkg) {
     }
   }
 
-  // Persist refreshed cookies (Google rotates them)
-  await context.storageState({ path: AUTH_FILE });
-  await browser.close();
+  // The persistent profile keeps cookies on disk automatically.
+  await context.close();
 
   console.log(`\n🏁 Terminé: ${created} créée(s), ${failed} échec(s).`);
   process.exit(failed > 0 && created === 0 ? 1 : 0);
