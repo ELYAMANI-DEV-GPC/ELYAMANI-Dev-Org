@@ -154,6 +154,15 @@ test('reject a missing or ambiguous applicationId before any commit', async () =
   await assert.rejects(generateVariant('android/app/build.gradle.kts', `android {\n    namespace = "${namespace}"\n    defaultConfig {\n        applicationId = "com.example.app"\n        applicationId = "com.example.other"\n    }\n}\n`), /applicationId \(2 matches\)/);
 });
 
+test('generated workflow enforces the required Android signing secrets', async () => {
+  const workflow = await generatedWorkflow('main');
+  const required = ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD', 'ANDROID_STORE_PASSWORD'];
+  for (const name of required) {
+    assert.match(workflow, new RegExp(`\\$\\{\\{ secrets\\.${name} \\}\\}`), `workflow should reference ${name}`);
+    assert.ok(workflow.includes(`for name in ${required.join(' ')}`), 'workflow should validate all required secret names');
+  }
+});
+
 async function generatedWorkflow(targetBranch = null) {
   let workflow;
   const fetch = async (url, request = {}) => {

@@ -25,6 +25,24 @@ function generateDefaultPackageName() {
   return `com.app${generateRandomPackageSegment()}.generated`;
 }
 
+// Theme color palette used for variant randomization
+const VARIANT_COLOR_PALETTE = ['#8BC34A', '#558B2F', '#1565C0'];
+
+// Shuffle the palette and assign one random color to each variant color input
+function randomizeVariantColors() {
+  const shuffled = [...VARIANT_COLOR_PALETTE];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const primary = document.getElementById('ghPrimaryColor');
+  const dark = document.getElementById('ghDarkColor');
+  const iconBg = document.getElementById('ghIconBg');
+  if (primary) primary.value = shuffled[0];
+  if (dark) dark.value = shuffled[1];
+  if (iconBg) iconBg.value = shuffled[2];
+}
+
 const generatedPackageNames = new Map();
 
 function parseAppLine(line, index) {
@@ -187,6 +205,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         reader.readAsText(file);
       }
     });
+  }
+
+  // Randomize theme colors button (picks from the variant palette)
+  const randomizeColorsBtn = document.getElementById('ghRandomizeColors');
+  if (randomizeColorsBtn) {
+    randomizeColorsBtn.addEventListener('click', () => randomizeVariantColors());
   }
 
   // Logo file input: read as base64 PNG (resize to 512x512 via canvas)
@@ -690,6 +714,9 @@ document.getElementById('startBtn').addEventListener('click', async () => {
         // Step 5: Auto GitHub Build & Publish if enabled
         const autoBuild = document.getElementById('autoBuild').checked;
         if (autoBuild && isRunning) {
+          // Shuffle theme colors from the palette for this app if enabled
+          const randomPerApp = document.getElementById('ghRandomColorsPerApp');
+          if (randomPerApp && randomPerApp.checked) randomizeVariantColors();
           // Generate default package name if not provided
           let buildPkg = pkg;
           if (!buildPkg) {
@@ -827,6 +854,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
 
 document.getElementById('stopBtn').addEventListener('click', () => {
   isRunning = false;
+  consoleFetchRunning = false;
   log('Stopping...', 'info');
 });
 
@@ -6105,4 +6133,848 @@ document.getElementById('buildBtn').addEventListener('click', async () => {
     buildBtn.style.background = '#7C4DFF';
     buildBtn.textContent = '🚀 Setup + Build + Publish';
   }, 10000);
+});
+
+// ==================== FETCH ALL CONSOLE (DEVELOPER ACCOUNT REPORTS) ====================
+
+let consoleFetchRunning = false;
+
+// ===== INJECTED: list accounts from the selector, or click one by name =====
+// action: 'list' -> { accounts: [{name, devId|null}] } ; 'click' -> true/false
+function consoleAccountMenuAction(action, accountName) {
+  return new Promise(async (resolve) => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = el => {
+      if (!el || !el.getBoundingClientRect) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 3 || r.height < 3) return false;
+      const s = getComputedStyle(el);
+      return s.visibility !== 'hidden' && s.display !== 'none';
+    };
+    // For popup containers only: accept elements whose subtree has any box
+    const visPopup = el => {
+      if (!el) return false;
+      if (vis(el)) return true;
+      const list = el.querySelector && el.querySelector('material-list');
+      return !!(list && list.getBoundingClientRect().height > 3);
+    };
+    // Shadow-DOM piercing querySelectorAll — Play Console renders the account
+    // selector inside Web Components, so plain querySelectorAll misses it.
+    function deepAll(selector, root) {
+      const results = [];
+      const stack = [root || document.documentElement];
+      while (stack.length) {
+        const node = stack.pop();
+        if (!node) continue;
+        if (node.shadowRoot) stack.push(node.shadowRoot);
+        if (node.nodeType === 1) {
+          try { if (node.matches(selector)) results.push(node); } catch (_) {}
+        }
+        const kids = node.children;
+        if (kids) for (let i = 0; i < kids.length; i++) stack.push(kids[i]);
+      }
+      return results;
+    }
+    // Realistic click — Play Console often listens to mousedown/up, not click()
+    function realClick(el) {
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 }));
+      }
+      try { el.click(); } catch (_) {}
+    }
+    const MARKERS = ['sign out', 'déconnexion', 'deconnexion', 'se déconnecter', 'se deconnecter',
+      'manage developer accounts', 'gérer les comptes', 'gerer les comptes',
+      'gérer les comptes de développeur', 'manage accounts'];
+    const EXCLUDE_RE = /manage developer accounts|gérer les comptes|gerer les comptes|sign out|déconnexion|deconnexion|se déconnecter|add account|ajouter un compte|view app|console/i;
+
+    // Precise: the Play Console developer-account listbox (Angular Material)
+    function findDevList() {
+      const lists = deepAll('material-list.developers-container, material-list[aria-label*="developer account" i], material-list[aria-label*="comptes" i]');
+      return lists.filter(visPopup)[0] || null;
+    }
+    function devListRows(list) {
+      return deepAll('material-select-item', list)
+        .filter(vis)
+        .filter(r => r.getAttribute('debug-id') !== 'manage-accounts-button')
+        .filter(r => r.querySelector('.primary-text'));
+    }
+    function devListName(row) {
+      const pt = row.querySelector('.primary-text');
+      return pt ? pt.textContent.trim() : '';
+    }
+
+    function findMenu() {
+      const devList = findDevList();
+      if (devList) return devList;
+      const matches = [];
+      const all = deepAll('div, ul, [role="menu"], [role="listbox"], [role="dialog"], [role="list"]');
+      for (const el of all) {
+        if (!vis(el)) continue;
+        const t = ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+        if (!MARKERS.some(m => t.includes(m))) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 120 || r.height < 80) continue;
+        if (r.width >= window.innerWidth * 0.98 && r.height >= window.innerHeight * 0.98) continue;
+        matches.push(el);
+      }
+      // deepest match (one that contains no other match)
+      for (const el of matches) {
+        if (!matches.some(o => o !== el && el.contains(o))) return el;
+      }
+      return null;
+    }
+
+    function itemName(el) {
+      const lines = (el.innerText || '').split('\n').map(s => s.trim())
+        .filter(s => s.length > 1 && s.length < 80 && !s.includes('@') && !EXCLUDE_RE.test(s));
+      return lines[0] || '';
+    }
+
+    function menuRows(menu) {
+      const rows = deepAll('a, button, li, [role="menuitem"], [role="option"], [role="link"], [role="menuitemlink"], [class*="item"], [class*="entry"], [class*="account"]', menu)
+        .filter(vis)
+        .filter(el => itemName(el));
+      // keep only outermost rows (avoid nested duplicates)
+      return rows.filter(el => !rows.some(o => o !== el && el.contains(o)));
+    }
+
+    function parseItems(menu) {
+      const items = [];
+      const seen = new Set();
+      // Path 0: the exact Play Console developer listbox (material-select-item rows)
+      const list = findDevList() || (menu && menu.matches && menu.matches('material-list') ? menu : null);
+      if (list) {
+        for (const row of devListRows(list)) {
+          const name = devListName(row);
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          items.push({ name, devId: null });
+        }
+        if (items.length) return items;
+      }
+      // Path 1: anchor items exposing the developer id in their href (menu first, then whole page)
+      let anchors = deepAll('a[href*="developers/"]', menu);
+      if (!anchors.length) anchors = deepAll('a[href*="developers/"]');
+      for (const a of anchors) {
+        if (!vis(a)) continue;
+        const m = (a.getAttribute('href') || '').match(/developers\/(\d+)/);
+        if (!m) continue;
+        const name = itemName(a);
+        if (!name || seen.has(m[1])) continue;
+        seen.add(m[1]);
+        items.push({ name, devId: m[1] });
+      }
+      if (items.length) return items;
+      // Path 2: clickable rows without hrefs (resolved later by clicking)
+      const seenNames = new Set();
+      for (const el of menuRows(menu)) {
+        const name = itemName(el);
+        if (!name || seenNames.has(name)) continue;
+        seenNames.add(name);
+        items.push({ name, devId: null });
+      }
+      return items;
+    }
+
+    // Activate the developer-switcher using several event strategies
+    async function activateSwitcher() {
+      const btn = deepAll('developer-switcher button[debug-id="current-developer-button"], button[debug-id="current-developer-button"]')
+        .filter(vis)[0];
+      if (!btn) return false;
+      const wrapper = btn.closest('console-button-popup, [popupsource], .popup-source') || btn;
+      const img = btn.querySelector('img');
+      const targets = [wrapper, btn, img].filter(Boolean);
+      for (const t of targets) {
+        const r = t.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+          t.dispatchEvent(new (type.startsWith('pointer') ? PointerEvent : MouseEvent)(type,
+            { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, isPrimary: true }));
+        }
+      }
+      try { btn.focus(); } catch (_) {}
+      try { btn.click(); } catch (_) {}
+      // Wait for the popup pane to actually fill with the developer list
+      for (let w = 0; w < 24; w++) {
+        await sleep(250);
+        const list = findDevList();
+        if (list && devListRows(list).length > 0) return true;
+        const popup = deepAll('material-popup.dropdown-popup, material-popup.console-popup').filter(vis)
+          .find(p => (p.innerText || '').trim().length > 5);
+        if (popup && findDevList()) return true;
+      }
+      return !!findDevList();
+    }
+
+    async function openMenu() {
+      let menu = findMenu();
+      if (menu) return menu;
+      // 1) The exact Play Console trigger: developer-switcher icon button (up to 3 attempts)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const ok = await activateSwitcher();
+        if (ok) {
+          menu = findMenu();
+          if (menu) return menu;
+        }
+        await sleep(400);
+      }
+      // 2) The gaia-selector / account chip in the top-right
+      const chip = deepAll('gaia-selector, material-chip, [class*="gaia"], [class*="account-chip"], [debug-id*="account"]')
+        .filter(vis)[0];
+      if (chip) {
+        realClick(chip);
+        await sleep(900);
+        menu = findMenu();
+        if (menu) return menu;
+      }
+      // 2) Scan likely top-right buttons
+      const btns = deepAll('button, [role="button"], a, [aria-haspopup], [aria-label]')
+        .filter(vis)
+        .filter(b => { const r = b.getBoundingClientRect(); return r.top < 120 && r.height < 90 && r.width < 420; })
+        .sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
+      // Try likely account buttons first (avatar, name, arrow), then the rest
+      const score = b => {
+        const s = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
+        let sc = 0;
+        if (/account|compte|avatar|profile|profil|switch|changer/.test(s)) sc += 3;
+        if (/notification|bell|help|aide/.test(s)) sc -= 2;
+        return sc;
+      };
+      btns.sort((a, b) => (score(b) - score(a)) || (b.getBoundingClientRect().right - a.getBoundingClientRect().right));
+      for (const b of btns.slice(0, 18)) {
+        realClick(b);
+        await sleep(900);
+        menu = findMenu();
+        if (menu) return menu;
+        // maybe the click opened anchors directly without a marker container
+        if (deepAll('a[href*="developers/"]').filter(vis).length >= 2) return document.body;
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await sleep(300);
+      }
+      return null;
+    }
+
+    function findScroller(menu) {
+      let best = menu;
+      const all = deepAll('*', menu);
+      for (const el of all) {
+        if (el.scrollHeight > el.clientHeight + 30 && el.clientHeight > 60) {
+          if (best === menu || el.contains(best) === false) best = el;
+        }
+      }
+      return best;
+    }
+
+    try {
+      const menu = await openMenu();
+      if (!menu) { resolve(action === 'list' ? { accounts: [], error: 'Account selector menu not found' } : false); return; }
+      const scroller = findScroller(menu);
+      const step = Math.max(140, (scroller.clientHeight || 300) - 40);
+
+      if (action === 'list') {
+        const accMap = new Map();
+        const collect = () => { for (const it of parseItems(menu)) accMap.set(it.devId || it.name, it); };
+        collect();
+        for (let pos = 0; pos <= scroller.scrollHeight + step; pos += step) {
+          scroller.scrollTop = pos;
+          await sleep(350);
+          collect();
+        }
+        scroller.scrollTop = 0;
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        resolve({ accounts: [...accMap.values()] });
+        return;
+      }
+
+      // action === 'click': scroll until the named account row is visible, then click it
+      for (let pos = 0; pos <= scroller.scrollHeight + step; pos += step) {
+        // Precise path: material-select-item rows matched by .primary-text
+        const list = findDevList();
+        if (list) {
+          const rows = devListRows(list);
+          const target = rows.find(r => devListName(r) === accountName)
+            || rows.find(r => devListName(r).toLowerCase() === (accountName || '').toLowerCase());
+          if (target) {
+            target.scrollIntoView({ block: 'center' });
+            await sleep(250);
+            // Focus the option (Angular Material listens to focus + keyboard)
+            try { target.focus(); } catch (_) {}
+            target.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+            await sleep(150);
+            // Full pointer sequence on the row AND its inner developer-item
+            realClick(target);
+            const inner = target.querySelector('developer-item, .primary-text');
+            if (inner) realClick(inner);
+            await sleep(200);
+            // Keyboard confirm as extra fallback
+            for (const key of [' ', 'Enter']) {
+              target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+              target.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
+            }
+            resolve(true);
+            return;
+          }
+        }
+        const rows = menuRows(menu);
+        let target = rows.find(el => itemName(el) === accountName)
+          || rows.find(el => itemName(el).toLowerCase() === (accountName || '').toLowerCase())
+          || rows.find(el => itemName(el).toLowerCase().startsWith((accountName || '').toLowerCase()));
+        if (target) {
+          target.scrollIntoView({ block: 'center' });
+          await sleep(250);
+          realClick(target);
+          resolve(true);
+          return;
+        }
+        scroller.scrollTop = pos;
+        await sleep(350);
+      }
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      resolve(false);
+    } catch (e) {
+      resolve(action === 'list' ? { accounts: [], error: e.message } : false);
+    }
+  });
+}
+
+// ===== INJECTED: diagnostics — what the page exposes for account discovery =====
+function probeAccountSelector() {
+  const out = { url: location.href, headerAccounts: [], menuMarkers: [], topRightButtons: [], pageAnchors: [] };
+  const vis = el => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 3 || r.height < 3) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none';
+  };
+  function deepAll(selector, root) {
+    const results = [];
+    const stack = [root || document.documentElement];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) continue;
+      if (node.shadowRoot) stack.push(node.shadowRoot);
+      if (node.nodeType === 1) { try { if (node.matches(selector)) results.push(node); } catch (_) {} }
+      const kids = node.children;
+      if (kids) for (let i = 0; i < kids.length; i++) stack.push(kids[i]);
+    }
+    return results;
+  }
+  // Header account block (name / id on the current page)
+  const bt = document.body.innerText || '';
+  const im = bt.match(/Account ID[:\s]*([0-9]{6,})/i) || bt.match(/ID de compte[:\s]*([0-9]{6,})/i);
+  if (im) out.headerAccounts.push({ text: im[0].trim() });
+  // Any visible container mentioning account-menu markers
+  for (const el of deepAll('div, ul, [role="menu"], [role="listbox"], [role="dialog"]').filter(vis).slice(0, 4000)) {
+    const t = (el.innerText || '').toLowerCase();
+    if (['sign out', 'déconnexion', 'manage developer accounts', 'gérer les comptes'].some(m => t.includes(m))) {
+      const r = el.getBoundingClientRect();
+      out.menuMarkers.push({ tag: el.tagName, cls: (el.className || '').toString().slice(0, 60), w: Math.round(r.width), h: Math.round(r.height) });
+      if (out.menuMarkers.length >= 5) break;
+    }
+  }
+  // Top-right buttons that could open the selector
+  for (const b of deepAll('button, [role="button"], [aria-haspopup]').filter(vis)) {
+    const r = b.getBoundingClientRect();
+    if (r.top > 130 || r.height > 90 || r.width > 420) continue;
+    out.topRightButtons.push({
+      tag: b.tagName,
+      label: (b.getAttribute('aria-label') || b.innerText || '').trim().slice(0, 50),
+      right: Math.round(window.innerWidth - r.right)
+    });
+    if (out.topRightButtons.length >= 12) break;
+  }
+  // All developers/ anchors visible anywhere on the page
+  for (const a of deepAll('a[href*="developers/"]').filter(vis)) {
+    const m = (a.getAttribute('href') || '').match(/developers\/(\d+)/);
+    out.pageAnchors.push({ devId: m ? m[1] : '', text: (a.innerText || '').trim().split('\n')[0].slice(0, 40) });
+    if (out.pageAnchors.length >= 30) break;
+  }
+  return out;
+}
+
+// ===== INJECTED: page-wide scan of account links (no menu needed) =====
+function scanPageForAccounts() {
+  const vis = el => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 3 || r.height < 3) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none';
+  };
+  function deepAll(selector, root) {
+    const results = [];
+    const stack = [root || document.documentElement];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) continue;
+      if (node.shadowRoot) stack.push(node.shadowRoot);
+      if (node.nodeType === 1) { try { if (node.matches(selector)) results.push(node); } catch (_) {} }
+      const kids = node.children;
+      if (kids) for (let i = 0; i < kids.length; i++) stack.push(kids[i]);
+    }
+    return results;
+  }
+  const EXCLUDE_RE = /manage developer accounts|gérer les comptes|gerer les comptes|sign out|déconnexion|deconnexion|add account|ajouter un compte|view app|console/i;
+  // Left-nav items and other page links must never be treated as account names
+  const NAV_RE = /^(home|policy status|users and permissions|order management|download reports|developer account|activity log|settings|help|android developer verification|all apps|monetize|academy)$/i;
+  const accMap = new Map();
+  for (const a of deepAll('a[href*="developers/"]').filter(vis)) {
+    const m = (a.getAttribute('href') || '').match(/developers\/(\d+)/);
+    if (!m) continue;
+    const lines = (a.innerText || '').split('\n').map(s => s.trim())
+      .filter(s => s.length > 1 && s.length < 80 && !s.includes('@') && !EXCLUDE_RE.test(s) && !NAV_RE.test(s));
+    const name = lines[0] || '';
+    if (!name) continue;
+    if (!accMap.has(m[1])) accMap.set(m[1], { name, devId: m[1] });
+  }
+  const accounts = [...accMap.values()];
+  // Header of the current page: account name + id shown near "Account ID"
+  let headerName = '';
+  let headerId = '';
+  const bt = document.body.innerText || '';
+  const im = bt.match(/Account ID[:\s]*([0-9]{6,})/i) || bt.match(/ID de compte[:\s]*([0-9]{6,})/i);
+  if (im) headerId = im[1];
+  let idHost = null;
+  for (const el of deepAll('div, span, p, section, header, h1, h2, h3').filter(vis)) {
+    const t = el.textContent || '';
+    if (/Account ID|ID de compte/i.test(t)) {
+      if (!idHost || t.length < (idHost.textContent || '').length) idHost = el;
+    }
+  }
+  if (idHost) {
+    const container = idHost.closest('section, header, div') || idHost.parentElement;
+    const lines = ((container && container.innerText) || '').split('\n').map(s => s.trim())
+      .filter(s => s.length > 1 && s.length < 60 && !s.includes('@')
+        && !/account id|id de compte|organization account|compte d'organisation|compte organisation|pinned apps|applications épinglées/i.test(s));
+    headerName = lines[0] || '';
+  }
+  return { accounts, headerName, headerId };
+}
+
+// ===== INJECTED: extract account id + full apps table (all pages) from current account page =====
+function extractAccountAppsReport() {
+  return new Promise(async (resolve) => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = el => {
+      if (!el || !el.getBoundingClientRect) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 3 || r.height < 3) return false;
+      const s = getComputedStyle(el);
+      return s.visibility !== 'hidden' && s.display !== 'none';
+    };
+    try {
+      // Wait for the console splash screen to disappear
+      for (let w = 0; w < 30; w++) {
+        const splash = document.getElementById('console-splash-021280');
+        if (!splash || splash.classList.contains('hide') || splash.style.opacity === '0' || splash.style.display === 'none') break;
+        await sleep(1000);
+      }
+      await sleep(2500);
+
+      // ---- Account ID (page text, then URL) ----
+      let accountId = '';
+      const bodyText = document.body.innerText || '';
+      const m = bodyText.match(/Account ID[:\s]*([0-9]{6,})/i) || bodyText.match(/ID de compte[:\s]*([0-9]{6,})/i);
+      if (m) accountId = m[1];
+      if (!accountId) { const um = location.href.match(/developers\/(\d+)/); if (um) accountId = um[1]; }
+
+      // ---- Account name shown in the page header (best effort, for verification) ----
+      let pageAccountName = '';
+      let idHost = null;
+      const cand = document.querySelectorAll('div, span, p, section, header, h1, h2, h3');
+      for (const el of cand) {
+        const t = el.textContent || '';
+        if (/Account ID|ID de compte/i.test(t)) {
+          if (!idHost || t.length < (idHost.textContent || '').length) idHost = el;
+        }
+      }
+      if (idHost) {
+        const container = idHost.closest('section, header, div') || idHost.parentElement;
+        const lines = ((container && container.innerText) || '').split('\n').map(s => s.trim())
+          .filter(s => s.length > 1 && s.length < 60 && !s.includes('@')
+            && !/account id|id de compte|organization account|compte d'organisation|compte organisation|pinned apps|applications épinglées/i.test(s));
+        pageAccountName = lines[0] || '';
+      }
+
+      // ---- Apps table across all pages ----
+      const apps = [];
+      const seen = new Set();
+      const STATUS_RE = /^(production|draft|brouillon|removed|supprimée|supprime|suspended|suspendue|unpublished|retirée|retire|active|inactive|in review|en cours d'examen|rejected|refusée|refuse)$/i;
+      const DATE_RE = /([A-Z][a-z]{2,9}\.? \d{1,2}, \d{4})|(\d{1,2} [a-zéûà]+\.? \d{4})|(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i;
+      const PKG_RE = /([a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,})/i;
+
+      function parseRow(row) {
+        if (!row || !row.querySelector) return null;
+        const link = row.querySelector('a[href*="/app/"]');
+        if (!link) return null;
+        const hrefM = (link.getAttribute('href') || '').match(/\/app\/(\d+)/);
+        let name = '';
+        let pkg = '';
+        // Prefer structured cells: first cell holds the app title + package
+        const cells = Array.from(row.querySelectorAll('td, [role="cell"], [role="gridcell"]'));
+        if (cells.length) {
+          const firstText = (cells[0].innerText || '').trim();
+          const fl = firstText.split('\n').map(s => s.trim()).filter(Boolean);
+          for (const t of fl) {
+            if (!name && !PKG_RE.test(t) && !STATUS_RE.test(t) && t.length > 1 && t.length < 80) name = t;
+            if (!pkg) { const pm = t.match(PKG_RE); if (pm) pkg = pm[1]; }
+          }
+        }
+        if (!name) {
+          // Walk the link's own lines, skipping package-like and action text
+          const ll = (link.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+          for (const t of ll) {
+            if (!PKG_RE.test(t) && !STATUS_RE.test(t) && !/^(view app|open app)$/i.test(t) && t.length > 1 && t.length < 80) { name = t; break; }
+          }
+        }
+        if (!pkg) {
+          const rowText = row.innerText || '';
+          const pm = rowText.match(PKG_RE);
+          if (pm) pkg = pm[1];
+        }
+        if (/^(view app|open app)$/i.test(name || '')) name = '';
+        const texts = (cells.length ? cells.map(c => (c.innerText || '').trim()) : (row.innerText || '').split('\n').map(s => s.trim())).filter(Boolean);
+        let status = '', updateStatus = '', installed = '', updated = '';
+        for (const t of texts) {
+          if (!status && STATUS_RE.test(t)) { status = t; continue; }
+          if (!updateStatus && status && /update|mise à jour|jour|rollout|déploiement/i.test(t) && t.length < 60 && t !== status) updateStatus = t;
+          if (!updated) { const dm = t.match(DATE_RE); if (dm) updated = dm[0]; }
+          if (!installed && /^\d[\d\s,.]*$/.test(t) && t.length < 12) installed = t.replace(/\s/g, '');
+        }
+        if (!name) name = pkg;
+        if (!name && !pkg) return null;
+        const key = pkg || name;
+        if (seen.has(key)) return null;
+        seen.add(key);
+        return { name, pkg, appId: hrefM ? hrefM[1] : '', installed, status, updateStatus, updated };
+      }
+
+      for (let page = 0; page < 30; page++) {
+        const rows = document.querySelectorAll('tr, [role="row"], li');
+        for (const row of rows) { const app = parseRow(row); if (app) apps.push(app); }
+        if (page === 0 && apps.length === 0) {
+          // Fallback: no table markup — walk up from each app link to a pseudo-row
+          for (const a of document.querySelectorAll('a[href*="/app/"]')) {
+            let row = a;
+            for (let up = 0; up < 4 && row.parentElement; up++) {
+              row = row.parentElement;
+              const t = row.innerText || '';
+              if (PKG_RE.test(t) || STATUS_RE.test(t.trim())) break;
+            }
+            const app = parseRow(row);
+            if (app) apps.push(app);
+          }
+        }
+        // Next page button (pagination)
+        const nextBtn = Array.from(document.querySelectorAll('button, [role="button"]')).filter(vis)
+          .find(b => /next page|next|page suivante|suivant/i.test(b.getAttribute('aria-label') || '')
+            && !b.disabled && b.getAttribute('aria-disabled') !== 'true');
+        if (!nextBtn) break;
+        const firstLink = document.querySelector('a[href*="/app/"]');
+        const sig = (firstLink ? firstLink.getAttribute('href') : '') + '|' + document.querySelectorAll('a[href*="/app/"]').length;
+        nextBtn.click();
+        let changed = false;
+        for (let w = 0; w < 24; w++) {
+          await sleep(500);
+          const f = document.querySelector('a[href*="/app/"]');
+          const nsig = (f ? f.getAttribute('href') : '') + '|' + document.querySelectorAll('a[href*="/app/"]').length;
+          if (nsig !== sig) { changed = true; break; }
+        }
+        if (!changed) break;
+        await sleep(1200);
+      }
+
+      resolve({ accountId, pageAccountName, apps });
+    } catch (e) {
+      resolve({ accountId: '', pageAccountName: '', apps: [], error: e.message });
+    }
+  });
+}
+
+// ===== Sidebar-side helpers for the reports =====
+
+function sanitizeReportFileName(name) {
+  return (name || 'account').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').trim() || 'account';
+}
+
+function csvEscape(v) {
+  const s = (v === undefined || v === null) ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function accountStatusCounts(apps) {
+  const prod = apps.filter(a => /production|active/i.test(a.status || '')).length;
+  const draft = apps.filter(a => /draft|brouillon/i.test(a.status || '')).length;
+  return { total: apps.length, prod, draft };
+}
+
+function buildAccountCsv(accountName, report) {
+  const c = accountStatusCounts(report.apps);
+  const rows = [
+    ['Account Name', accountName],
+    ['Account ID', report.accountId || ''],
+    ['Total Apps', c.total],
+    ['Production Apps', c.prod],
+    ['Draft Apps', c.draft],
+    [],
+    ['App', 'Package Name', 'Installed Audience', 'App Status', 'Update Status', 'Last Updated'],
+    ...report.apps.map(a => [a.name, a.pkg, a.installed, a.status, a.updateStatus, a.updated])
+  ];
+  return rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+}
+
+function buildAccountsSummaryCsv(entries) {
+  const rows = [
+    ['Account Name', 'Account ID', 'Total Apps', 'Production Apps', 'Draft Apps', 'Report File'],
+    ...entries.map(e => [e.name, e.accountId, e.total, e.prod, e.draft, e.fileName])
+  ];
+  return rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+}
+
+function downloadCsvFile(filename, content) {
+  const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function downloadDataUrl(filename, dataUrl) {
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+// Build a human-readable description of one developer account from its report
+function buildAccountDescription(accountName, report, screenshotFile) {
+  const c = accountStatusCounts(report.apps);
+  const date = new Date().toISOString().slice(0, 10);
+  const lines = [
+    `Developer Account: ${accountName}`,
+    `Account ID: ${report.accountId || 'unknown'}`,
+    `Captured: ${date}`,
+    `Dashboard screenshot: ${screenshotFile || 'not captured'}`,
+    '',
+    `Total apps: ${c.total}`,
+    `Production apps: ${c.prod}`,
+    `Draft apps: ${c.draft}`,
+    `Other status: ${c.total - c.prod - c.draft}`,
+    '',
+    'Apps:',
+    ...(report.apps.length
+      ? report.apps.map(a =>
+          `- ${a.name}${a.pkg ? ` (${a.pkg})` : ''} — ${a.status || 'unknown status'}`
+          + `${a.installed ? `, installed audience ${a.installed}` : ''}`
+          + `${a.updated ? `, last updated ${a.updated}` : ''}`
+          + `${a.pkg ? `\n  https://play.google.com/store/apps/details?id=${a.pkg}` : ''}`)
+      : ['- No apps found on this account.'])
+  ];
+  return lines.join('\n');
+}
+
+// Capture the visible Play Console tab as PNG, returns a data URL or null
+async function captureDashboardScreenshot(tab) {
+  try {
+    return await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  } catch (_) {
+    return null;
+  }
+}
+
+function renderConsoleReportResults(entries) {
+  const host = document.getElementById('consoleReportResults');
+  if (!host) return;
+  host.innerHTML = entries.map(e =>
+    `<div class="console-report-entry">${e.error
+      ? `⚠️ <b>${e.name}</b> — ${e.error}`
+      : `✅ <b>${e.name}</b> (${e.accountId || 'no id'}) — ${e.total} apps: ${e.prod} production, ${e.draft} draft → ${e.fileName}`}</div>`
+  ).join('');
+}
+
+// ===== One-click: fetch the whole console, one CSV report per developer account =====
+document.getElementById('fetchAllConsoleBtn').addEventListener('click', async () => {
+  if (consoleFetchRunning) return;
+  const btn = document.getElementById('fetchAllConsoleBtn');
+  const resultsHost = document.getElementById('consoleReportResults');
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.url || !tab.url.includes('play.google.com/console')) {
+    log('Navigate to Google Play Console first!', 'error');
+    return;
+  }
+
+  consoleFetchRunning = true;
+  btn.disabled = true;
+  document.getElementById('stopBtn').style.display = 'block';
+  if (resultsHost) resultsHost.innerHTML = '';
+  const entries = [];
+
+  try {
+    log('🔍 Reading developer accounts from the account selector...', 'info');
+    let res = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: consoleAccountMenuAction,
+      args: ['list', '']
+    });
+    let data = (res && res[0] && res[0].result) || { accounts: [] };
+    let accounts = data.accounts || [];
+    if (accounts.length === 0) {
+      // Fallback 1: scan the whole page for developers/<id> links (selector may render links)
+      log('  ℹ️ Selector menu not detected — scanning page for account links...', 'info');
+      res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: scanPageForAccounts });
+      data = (res && res[0] && res[0].result) || { accounts: [] };
+      accounts = (data.accounts || []).slice();
+      // Only accept nav-free results; otherwise fall back to the current account from the header
+      const currentDevId = (tab.url.match(/developers\/(\d+)/) || [])[1] || data.headerId || '';
+      const currentName = data.headerName || (accounts.length === 1 ? accounts[0].name : '') || 'CurrentAccount';
+      if (accounts.length <= 1 && currentDevId) {
+        accounts = [{ name: currentName, devId: currentDevId }];
+        log(`  ℹ️ Only the current account could be identified: ${currentName} (${currentDevId})`, 'info');
+        log('  ℹ️ To process every account, open the account selector once before running, or paste the ⚙️ Debug output if this repeats.', 'info');
+      }
+    }
+    if (accounts.length === 0) {
+      // Diagnostics: dump what the page exposes so we can adapt detection
+      const probe = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: probeAccountSelector });
+      const info = (probe && probe[0] && probe[0].result) || {};
+      log(`  ⚙️ Debug: url=${info.url || '?'}`, 'info');
+      log(`  ⚙️ Debug: header=${JSON.stringify(info.headerAccounts || [])}`, 'info');
+      log(`  ⚙️ Debug: menuMarkers=${JSON.stringify(info.menuMarkers || [])}`, 'info');
+      log(`  ⚙️ Debug: topRightButtons=${JSON.stringify(info.topRightButtons || [])}`, 'info');
+      log(`  ⚙️ Debug: pageAnchors=${JSON.stringify(info.pageAnchors || [])}`, 'info');
+      throw new Error('No developer accounts found. Copy the ⚙️ Debug lines above and send them so detection can be adapted to your console layout.');
+    }
+    log(`Found ${accounts.length} developer account(s): ${accounts.map(a => a.name).join(', ')}`, 'success');
+
+    for (let i = 0; i < accounts.length; i++) {
+      if (!consoleFetchRunning) { log('Stopped by user.', 'info'); break; }
+      const acc = accounts[i];
+      const pct = Math.round((i / accounts.length) * 100);
+      document.getElementById('progressBar').style.width = pct + '%';
+      log(`▶ [${i + 1}/${accounts.length}] ${acc.name}...`, 'info');
+
+      try {
+        // 1) Switch to the account (direct URL when the id is known, selector click otherwise)
+        if (acc.devId) {
+          await chrome.tabs.update(tab.id, { url: `https://play.google.com/console/u/0/developers/${acc.devId}/app-list` });
+          await waitForTabLoad(tab.id);
+        } else {
+          const before = (await chrome.tabs.get(tab.id)).url;
+          const beforeDev = (before.match(/developers\/(\d+)/) || [])[1] || '';
+          const clickRes = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: consoleAccountMenuAction,
+            args: ['click', acc.name]
+          });
+          if (!clickRes || !clickRes[0] || clickRes[0].result !== true) {
+            throw new Error('could not click the account in the selector');
+          }
+          // Wait until the URL shows a DIFFERENT developer id (SPA navigation)
+          for (let w = 0; w < 30; w++) {
+            await sleep(500);
+            const info = await chrome.tabs.get(tab.id);
+            const dm = (info.url || '').match(/developers\/(\d+)/);
+            if (dm && dm[1] !== beforeDev) { acc.devId = dm[1]; break; }
+          }
+          await waitForTabLoad(tab.id);
+        }
+        await sleep(3000);
+
+        // Resolve / confirm the account id from the URL
+        const info = await chrome.tabs.get(tab.id);
+        const devMatch = (info.url || '').match(/developers\/(\d+)/);
+        if (devMatch) acc.devId = devMatch[1];
+
+        // 2) Extract the apps table
+        let ext = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAccountAppsReport });
+        let report = (ext && ext[0] && ext[0].result) || { apps: [] };
+
+        // Fallback: retry from the account root page if nothing was found
+        if ((!report.apps || report.apps.length === 0) && acc.devId) {
+          log(`  ℹ️ No apps on this page, retrying from account home...`, 'info');
+          await chrome.tabs.update(tab.id, { url: `https://play.google.com/console/u/0/developers/${acc.devId}/` });
+          await waitForTabLoad(tab.id);
+          await sleep(3000);
+          ext = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAccountAppsReport });
+          report = (ext && ext[0] && ext[0].result) || report;
+        }
+        if (!report.accountId) report.accountId = acc.devId || '';
+        if (report.error) throw new Error(report.error);
+        if (report.pageAccountName && report.pageAccountName.toLowerCase() !== acc.name.toLowerCase()) {
+          log(`  ⚠️ Page header shows "${report.pageAccountName}" — keeping selector name "${acc.name}"`, 'info');
+        }
+
+        // 3) Build + download the per-account CSV report
+        const csv = buildAccountCsv(acc.name, report);
+        const baseName = sanitizeReportFileName(acc.name);
+        const fileName = baseName + '_report.csv';
+        downloadCsvFile(fileName, csv);
+
+        // 4) Dashboard screenshot for this account
+        const screenshotFile = baseName + '_dashboard.png';
+        const shot = await captureDashboardScreenshot(tab);
+        let savedShot = '';
+        if (shot) {
+          downloadDataUrl(screenshotFile, shot);
+          savedShot = screenshotFile;
+        } else {
+          log('  ⚠️ Dashboard screenshot not captured (permission or focus issue)', 'info');
+        }
+
+        // 5) Human-readable description for this account
+        const description = buildAccountDescription(acc.name, report, savedShot);
+        const descFile = baseName + '_description.txt';
+        downloadTextFile(descFile, description);
+
+        const c = accountStatusCounts(report.apps);
+        entries.push({ name: acc.name, accountId: report.accountId, total: c.total, prod: c.prod, draft: c.draft, fileName, screenshotFile: savedShot, descFile, description });
+        renderConsoleReportResults(entries);
+        log(`  ✅ ${acc.name}: ${c.total} apps (${c.prod} production, ${c.draft} draft) → ${fileName}${savedShot ? ` + ${savedShot}` : ''} + ${descFile}`, 'success');
+        await sleep(1200);
+      } catch (e) {
+        entries.push({ name: acc.name, accountId: acc.devId || '', error: e.message });
+        renderConsoleReportResults(entries);
+        log(`  ❌ ${acc.name}: ${e.message}`, 'error');
+      }
+    }
+
+    if (entries.some(e => !e.error)) {
+      const okEntries = entries.filter(e => !e.error);
+      downloadCsvFile('all_accounts_summary.csv', buildAccountsSummaryCsv(okEntries));
+      log('📦 Downloaded all_accounts_summary.csv', 'success');
+      downloadTextFile('all_accounts_descriptions.txt',
+        okEntries.map(e => e.description).join('\n\n========================================\n\n'));
+      log('📦 Downloaded all_accounts_descriptions.txt', 'success');
+    }
+    document.getElementById('progressBar').style.width = '100%';
+    log('🏁 Fetch all console finished.', 'success');
+  } catch (e) {
+    log('Error: ' + e.message, 'error');
+  } finally {
+    consoleFetchRunning = false;
+    btn.disabled = false;
+    document.getElementById('stopBtn').style.display = 'none';
+  }
 });

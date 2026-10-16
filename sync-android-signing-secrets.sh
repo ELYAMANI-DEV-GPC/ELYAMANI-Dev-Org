@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 OWNER/REPO [BRANCH] [KEY_PROPERTIES_PATH] [--keystore-path PATH] [--dry-run]" >&2
+  echo "Usage: $0 OWNER/REPO [BRANCH] [KEY_PROPERTIES_PATH] [--keystore-path PATH] [--dry-run] [--yes]" >&2
   exit 2
 }
 
@@ -13,9 +13,11 @@ KEY_PROPERTIES_PATH=${3:-android/key.properties}
 if [[ $# -ge 3 ]]; then shift 3; else shift "$#"; fi
 KEYSTORE_PATH_OVERRIDE=
 DRY_RUN=0
+ASSUME_YES=0
 while [[ $# -gt 0 ]]; do
   case $1 in
     --dry-run) DRY_RUN=1; shift ;;
+    --yes) ASSUME_YES=1; shift ;;
     --keystore-path)
       [[ $# -ge 2 ]] || usage
       KEYSTORE_PATH_OVERRIDE=$2
@@ -149,8 +151,10 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-read -r -p "Set four Android signing secrets in $REPOSITORY? [y/N] " confirmation
-[[ $confirmation == [yY] ]] || { echo 'Cancelled; no secrets were set.'; exit 0; }
+if [[ $ASSUME_YES -eq 0 ]]; then
+  read -r -p "Set four Android signing secrets in $REPOSITORY? [y/N] " confirmation
+  [[ $confirmation == [yY] ]] || { echo 'Cancelled; no secrets were set.'; exit 0; }
+fi
 
 printf '%s' "$KEYSTORE_BASE64" | gh secret set ANDROID_KEYSTORE_BASE64 --repo "$REPOSITORY"
 printf '%s' "$KEY_ALIAS" | gh secret set ANDROID_KEY_ALIAS --repo "$REPOSITORY"

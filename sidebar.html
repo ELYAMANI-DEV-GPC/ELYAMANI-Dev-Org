@@ -20,6 +20,11 @@
     #startBtn:hover { background: #00b8d9; }
     #startBtn:disabled { background: #555; color: #888; cursor: not-allowed; }
     #stopBtn { background: #ff4757; color: white; display: none; }
+    #fetchAllConsoleBtn { background: #00b894; color: #1a1a2e; }
+    #fetchAllConsoleBtn:hover { background: #00a381; }
+    #fetchAllConsoleBtn:disabled { background: #555; color: #888; cursor: not-allowed; }
+    #consoleReportResults { margin-top: 8px; font-size: 11px; color: #aaa; max-height: 160px; overflow-y: auto; }
+    .console-report-entry { padding: 4px 0; border-bottom: 1px solid #222; overflow-wrap: anywhere; }
     #configBtn { background: #2ed573; color: #1a1a2e; }
     #configBtn:hover { background: #26b85e; }
     #configBtn:disabled { background: #555; color: #888; cursor: not-allowed; }
@@ -91,6 +96,14 @@
     <div id="updatesHost"></div>
   </section>
   <section id="createPanel" class="workspace-panel" role="tabpanel" aria-labelledby="createTab" hidden>
+
+  <!-- Fetch All Console Reports -->
+  <h2>📊 Console Reports</h2>
+  <div class="section">
+    <small>One click: scans every developer account in the Play Console account selector, then downloads per account: a CSV report (<b>AccountName_report.csv</b>), a dashboard screenshot (<b>AccountName_dashboard.png</b>) and a description (<b>AccountName_description.txt</b>) — plus <b>all_accounts_summary.csv</b> and <b>all_accounts_descriptions.txt</b>.</small>
+    <button id="fetchAllConsoleBtn" type="button">📊 Fetch all console</button>
+    <div id="consoleReportResults"></div>
+  </div>
 
   <div class="section">
     <label>Apps: name|package (one per line)</label>
@@ -404,6 +417,12 @@
           <label>Accent / Icon Background</label>
           <input type="text" id="ghIconBg" value="#1565C0" placeholder="#1565C0">
         </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <button type="button" id="ghRandomizeColors" style="width:auto;padding:3px 10px;background:#263238;color:#fff;font-size:11px;cursor:pointer;border-radius:4px" title="Pick random colors from the palette (#8BC34A, #558B2F, #1565C0)">🎲 Random colors</button>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;margin:0">
+          <input type="checkbox" id="ghRandomColorsPerApp" checked> Random per app
+        </label>
       </div>
       <small style="display:block;margin-bottom:8px">Setup creates branch, changes applicationId, app name, logo, theme, listing from the fields above</small>
       <div class="section">
