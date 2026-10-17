@@ -6702,6 +6702,75 @@ function extractAccountAppsReport() {
   });
 }
 
+// ===== INJECTED: scan the activity-log page for the "Account created" event =====
+function extractAccountCreatedFromActivityLog() {
+  return new Promise(async (resolve) => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    try {
+      for (let w = 0; w < 30; w++) {
+        const splash = document.getElementById('console-splash-021280');
+        if (!splash || splash.classList.contains('hide') || splash.style.opacity === '0' || splash.style.display === 'none') break;
+        await sleep(1000);
+      }
+      await sleep(3000);
+
+      const text = document.body.innerText || '';
+      const DATE_RE = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}/i;
+      const CREATED_RE = /account created|compte créé|compte cree|cuenta creada|konto erstellt/i;
+
+      let found = null;
+      const rows = document.querySelectorAll('tr, [role="row"], li, [class*="activity"], [class*="event"]');
+      for (const row of rows) {
+        const t = row.innerText || '';
+        if (CREATED_RE.test(t)) {
+          const dm = t.match(DATE_RE);
+          if (dm) { found = dm[0]; break; }
+        }
+      }
+      if (!found && CREATED_RE.test(text)) {
+        const idx = text.search(CREATED_RE);
+        const around = text.slice(Math.max(0, idx - 400), idx + 400);
+        const dm = around.match(DATE_RE);
+        if (dm) found = dm[0];
+      }
+      const rowCount = document.querySelectorAll('tr, [role="row"], li').length;
+      resolve({ createdDate: found, rowCount, hasCreatedMarker: CREATED_RE.test(text) });
+    } catch (e) {
+      resolve({ createdDate: null, rowCount: 0, hasCreatedMarker: false, error: e.message });
+    }
+  });
+}
+
+// Paginate the activity log backwards in 90-day windows until "Account created" is found.
+// The activity log caps at ~100 rows per window, so big accounts need date ranges in the URL.
+async function findAccountCreatedDate(tab, devId) {
+  const today = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  for (let w = 0; w < 30; w++) { // up to ~7.5 years back
+    const to = new Date(today); to.setDate(to.getDate() - w * 90);
+    const from = new Date(today); from.setDate(from.getDate() - (w + 1) * 90);
+    const url = `https://play.google.com/console/u/0/developers/${devId}/activity-log?from=${fmt(from)}&to=${fmt(to)}`;
+    await chrome.tabs.update(tab.id, { url });
+    await waitForTabLoad(tab.id);
+    await sleep(2500);
+    const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAccountCreatedFromActivityLog });
+    const r = res && res[0] && res[0].result;
+    if (r && r.createdDate) return r.createdDate;
+    // Two empty windows in a row → nothing older exists, stop early
+    if (r && r.rowCount === 0 && w >= 1) {
+      const prevUrl = `https://play.google.com/console/u/0/developers/${devId}/activity-log?from=${fmt(new Date(today.getTime() - (w + 2) * 90 * 86400000))}&to=${fmt(new Date(today.getTime() - (w + 1) * 90 * 86400000))}`;
+      await chrome.tabs.update(tab.id, { url: prevUrl });
+      await waitForTabLoad(tab.id);
+      await sleep(2500);
+      const res2 = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAccountCreatedFromActivityLog });
+      const r2 = res2 && res2[0] && res2[0].result;
+      if (r2 && r2.createdDate) return r2.createdDate;
+      if (r2 && r2.rowCount === 0) break;
+    }
+  }
+  return null;
+}
+
 // ===== Sidebar-side helpers for the reports =====
 
 function sanitizeReportFileName(name) {
@@ -6732,6 +6801,7 @@ function buildAccountCsv(accountName, report) {
   const rows = [
     ['Account Name', accountName],
     ['Account ID', report.accountId || ''],
+    ['Account Created', report.createdDate || ''],
     ['Total Apps', c.total],
     ['Production Apps', c.prod],
     ['Draft Apps', c.draft],
@@ -6751,8 +6821,8 @@ function buildAccountCsv(accountName, report) {
 
 function buildAccountsSummaryCsv(entries) {
   const rows = [
-    ['Account Name', 'Account ID', 'Total Apps', 'Production Apps', 'Draft Apps', 'Unpublished Apps', 'Removed Apps', 'Suspended Apps', 'Other Status Apps', 'Report File'],
-    ...entries.map(e => [e.name, e.accountId, e.total, e.prod, e.draft, e.unpublished || 0, e.removed || 0, e.suspended || 0, e.other || 0, e.fileName])
+    ['Account Name', 'Account ID', 'Account Created', 'Total Apps', 'Production Apps', 'Draft Apps', 'Unpublished Apps', 'Removed Apps', 'Suspended Apps', 'Other Status Apps', 'Report File'],
+    ...entries.map(e => [e.name, e.accountId, e.createdDate || '', e.total, e.prod, e.draft, e.unpublished || 0, e.removed || 0, e.suspended || 0, e.other || 0, e.fileName])
   ];
   return rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
 }
@@ -6812,6 +6882,7 @@ function buildAccountDescription(accountName, report, screenshotFile) {
   const lines = [
     `Developer Account: ${accountName}`,
     `Account ID: ${report.accountId || 'unknown'}`,
+    `Account created: ${report.createdDate || 'unknown'}`,
     `Captured: ${date}`,
     `Dashboard screenshot: ${screenshotFile || 'not captured'}`,
     '',
@@ -6983,13 +7054,9 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
           log(`  ⚠️ Page header shows "${report.pageAccountName}" — keeping selector name "${acc.name}"`, 'info');
         }
 
-        // 3) Build + download the per-account CSV report
-        const csv = buildAccountCsv(acc.name, report);
+        // 3) Dashboard screenshot for this account (BEFORE navigating away to the activity log)
         const baseName = sanitizeReportFileName(acc.name);
         const fileName = baseName + '_report.csv';
-        downloadCsvFile(fileName, csv);
-
-        // 4) Dashboard screenshot for this account
         const screenshotFile = baseName + '_dashboard.png';
         const shot = await captureDashboardScreenshot(tab);
         let savedShot = '';
@@ -6999,6 +7066,24 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
         } else {
           log('  ⚠️ Dashboard screenshot not captured (permission or focus issue)', 'info');
         }
+
+        // 3.5) Find the account creation date — paginate the activity log in 90-day
+        // windows (the log caps at ~100 rows, so big accounts need URL date ranges)
+        report.createdDate = '';
+        if (acc.devId) {
+          log(`  🕐 Searching activity log for the account creation date...`, 'info');
+          report.createdDate = (await findAccountCreatedDate(tab, acc.devId)) || '';
+          if (report.createdDate) log(`  📅 Account created: ${report.createdDate}`, 'success');
+          else log(`  ⚠️ "Account created" not found in the activity log`, 'info');
+          // Return to the app list so the next account starts from a clean page
+          await chrome.tabs.update(tab.id, { url: `https://play.google.com/console/u/0/developers/${acc.devId}/app-list` });
+          await waitForTabLoad(tab.id);
+          await sleep(1500);
+        }
+
+        // 4) Build + download the per-account CSV report (includes the creation date)
+        const csv = buildAccountCsv(acc.name, report);
+        downloadCsvFile(fileName, csv);
 
         // 5) Human-readable description for this account
         const description = buildAccountDescription(acc.name, report, savedShot);
@@ -7023,7 +7108,7 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
         }
 
         const c = accountStatusCounts(report.apps);
-        entries.push({ name: acc.name, accountId: report.accountId, total: c.total, prod: c.prod, draft: c.draft, unpublished: c.unpublished, removed: c.removed, suspended: c.suspended, other: c.other, fileName, screenshotFile: savedShot, descFile, description });
+        entries.push({ name: acc.name, accountId: report.accountId, createdDate: report.createdDate || '', total: c.total, prod: c.prod, draft: c.draft, unpublished: c.unpublished, removed: c.removed, suspended: c.suspended, other: c.other, fileName, screenshotFile: savedShot, descFile, description });
         renderConsoleReportResults(entries);
         log(`  ✅ ${acc.name}: ${c.total} apps (${c.prod} production, ${c.draft} draft) → ${fileName}${savedShot ? ` + ${savedShot}` : ''} + ${descFile}`, 'success');
         await sleep(1200);
