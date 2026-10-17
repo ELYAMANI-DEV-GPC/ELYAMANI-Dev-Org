@@ -6791,16 +6791,20 @@ function downloadDataUrl(filename, dataUrl) {
 }
 
 // Open WhatsApp (web/app) with the account description pre-filled — user just presses Send.
+// Returns true if a window/tab was actually opened (false when blocked by popup blocker).
 function sendWhatsAppDescription(phone, text) {
   const digits = (phone || '').replace(/[^0-9]/g, '');
   if (!digits) return false;
   const url = `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  // window.open works from the side panel; chrome.tabs.create can silently fail there.
+  const win = window.open(url, '_blank');
+  if (win) return true;
+  // Popup blocked — fall back to chrome.tabs (background-capable path)
   try {
-    chrome.tabs.create({ url, active: false });
+    chrome.tabs.create({ url, active: true });
     return true;
   } catch (_) {
-    window.open(url, '_blank');
-    return true;
+    return false;
   }
 }
 
@@ -7010,6 +7014,11 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
         if (waSend && waNumber) {
           const sent = sendWhatsAppDescription(waNumber, description);
           if (sent) log(`  📱 WhatsApp opened for ${acc.name} — press Send in the new tab`, 'info');
+          else log(`  ⚠️ WhatsApp popup blocked — allow popups for this page, then retry`, 'error');
+        } else if (waNumber && !waSend) {
+          // checkbox off — silent
+        } else if (waSend && !waNumber) {
+          log(`  ⚠️ WhatsApp send enabled but no number set`, 'error');
         }
 
         const c = accountStatusCounts(report.apps);
