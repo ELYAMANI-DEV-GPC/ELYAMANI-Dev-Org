@@ -104,6 +104,16 @@
     <label style="margin-top:6px">Only these accounts (optional — one per line, partial name OK)</label>
     <textarea id="consoleAccountFilter" style="height:52px" placeholder="ELYAMANI-DEV-GPC&#10;EOOrga"></textarea>
     <small>Leave empty to process every account. Matching is case-insensitive and partial (e.g. "elyamani" matches "ELYAMANI-DEV-GPC").</small>
+    <div class="row" style="align-items:center;margin-top:6px">
+      <div>
+        <label>WhatsApp number (optional)</label>
+        <input type="text" id="whatsAppNumber" value="+212675328661" placeholder="+2126...">
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:6px;padding-bottom:8px">
+        <input type="checkbox" id="whatsAppSend" checked>
+        <label for="whatsAppSend" style="display:inline;color:#2ed573;font-size:11px;cursor:pointer;margin:0">📱 Send each description to WhatsApp (opens wa.me per account)</label>
+      </div>
+    </div>
     <button id="fetchAllConsoleBtn" type="button">📊 Fetch all console</button>
     <div id="consoleReportResults"></div>
   </div>

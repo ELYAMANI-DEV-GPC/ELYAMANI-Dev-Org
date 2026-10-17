@@ -3703,7 +3703,7 @@ async function loadBranchSelector(token, repoFullName) {
 
 // Persist GitHub settings
 document.addEventListener('DOMContentLoaded', () => {
-  const fields = ['ghToken', 'ghRepo', 'ghBranch', 'ghBaseBranch', 'geminiApiKey'];
+  const fields = ['ghToken', 'ghRepo', 'ghBranch', 'ghBaseBranch', 'geminiApiKey', 'whatsAppNumber'];
   chrome.storage.local.get(fields, (d) => {
     fields.forEach(f => { if (d[f]) document.getElementById(f).value = d[f]; });
     // Auto-load repos if token is saved
@@ -3717,6 +3717,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (geminiEl) {
     geminiEl.addEventListener('input', () => {
       chrome.storage.local.set({ geminiApiKey: geminiEl.value.trim() });
+    });
+  }
+
+  // WhatsApp number persistence
+  const waEl = document.getElementById('whatsAppNumber');
+  if (waEl) {
+    waEl.addEventListener('input', () => {
+      chrome.storage.local.set({ whatsAppNumber: waEl.value.trim() });
     });
   }
 
@@ -6782,6 +6790,20 @@ function downloadDataUrl(filename, dataUrl) {
   a.remove();
 }
 
+// Open WhatsApp (web/app) with the account description pre-filled — user just presses Send.
+function sendWhatsAppDescription(phone, text) {
+  const digits = (phone || '').replace(/[^0-9]/g, '');
+  if (!digits) return false;
+  const url = `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  try {
+    chrome.tabs.create({ url, active: false });
+    return true;
+  } catch (_) {
+    window.open(url, '_blank');
+    return true;
+  }
+}
+
 // Build a human-readable description of one developer account from its report
 function buildAccountDescription(accountName, report, screenshotFile) {
   const c = accountStatusCounts(report.apps);
@@ -6981,6 +7003,14 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
         const description = buildAccountDescription(acc.name, report, savedShot);
         const descFile = baseName + '_description.txt';
         downloadTextFile(descFile, description);
+
+        // 6) Optional: open WhatsApp with this description pre-filled
+        const waNumber = (document.getElementById('whatsAppNumber')?.value || '').trim();
+        const waSend = document.getElementById('whatsAppSend')?.checked;
+        if (waSend && waNumber) {
+          const sent = sendWhatsAppDescription(waNumber, description);
+          if (sent) log(`  📱 WhatsApp opened for ${acc.name} — press Send in the new tab`, 'info');
+        }
 
         const c = accountStatusCounts(report.apps);
         entries.push({ name: acc.name, accountId: report.accountId, total: c.total, prod: c.prod, draft: c.draft, unpublished: c.unpublished, removed: c.removed, suspended: c.suspended, other: c.other, fileName, screenshotFile: savedShot, descFile, description });
