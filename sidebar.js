@@ -6796,7 +6796,7 @@ function autoClickWhatsAppSend() {
   return new Promise((resolve) => {
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     (async () => {
-      // wa.me redirects to web.whatsapp.com — wait for the send button to appear
+      // Wait for web.whatsapp.com chat to load — try multiple send-button selectors
       const SEND_SELECTORS = [
         '[data-icon="send"]',
         'button[aria-label*="Send" i]',
@@ -6807,6 +6807,8 @@ function autoClickWhatsAppSend() {
         'div[role="button"][aria-label*="Send" i]',
         'div[role="button"][aria-label*="Envoyer" i]'
       ];
+      // Also try the composer footer send icon (WhatsApp's current layout)
+      const COMPOSER_FOOTER = 'footer button, footer [role="button"], #main footer [data-icon]';
       for (let w = 0; w < 90; w++) { // up to 45s
         for (const sel of SEND_SELECTORS) {
           const btn = document.querySelector(sel);
@@ -6817,6 +6819,26 @@ function autoClickWhatsAppSend() {
             resolve({ sent: true, selector: sel, wait: w });
             return;
           }
+        }
+        // Fallback: last icon-button in the composer footer is usually Send
+        const footerBtns = document.querySelectorAll(COMPOSER_FOOTER);
+        if (footerBtns.length) {
+          const last = footerBtns[footerBtns.length - 1];
+          const clickable = last.closest('button, [role="button"], div') || last;
+          clickable.click();
+          last.click();
+          resolve({ sent: true, selector: 'composer-footer-fallback', wait: w });
+          return;
+        }
+        // Last resort: press Enter in the message composer (WhatsApp sends on Enter)
+        const composer = document.querySelector('[contenteditable="true"][data-tab="10"], #main [contenteditable="true"], div[contenteditable="true"][title]');
+        if (composer) {
+          composer.focus();
+          for (const type of ['keydown', 'keypress', 'keyup']) {
+            composer.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          }
+          resolve({ sent: true, selector: 'enter-key-fallback', wait: w });
+          return;
         }
         // If WhatsApp shows "phone number invalid" or a login QR code, bail out
         const bodyText = (document.body.innerText || '').toLowerCase();
@@ -6840,7 +6862,8 @@ function autoClickWhatsAppSend() {
 async function sendWhatsAppDescription(phone, text) {
   const digits = (phone || '').replace(/[^0-9]/g, '');
   if (!digits) return { opened: false, sent: false, error: 'no-number' };
-  const url = `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  // web.whatsapp.com/send works in-browser (scriptable). wa.me would open the native desktop app on Mac.
+  const url = `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(text)}`;
 
   // Create the tab via chrome.tabs (more reliable than window.open for scripting injection)
   let tab = null;
@@ -6853,7 +6876,7 @@ async function sendWhatsAppDescription(phone, text) {
   }
   if (!tab || !tab.id) return { opened: true, sent: false, error: 'no-tab-handle' };
 
-  // Wait for wa.me → web.whatsapp.com redirect + page load, then inject the clicker
+  // Wait for web.whatsapp.com to load the chat, then inject the clicker
   for (let attempt = 0; attempt < 24; attempt++) {
     await sleep(1000);
     try {
