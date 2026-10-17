@@ -264,6 +264,51 @@ test('build app queue from publish count and random repo pool', () => {
   assert.ok(result.every(app => typeof app.pkg === 'string' && app.pkg.length > 0));
 });
 
+test('randomize the selected repo from the saved repo pool once the dropdown loads', async () => {
+  const repoPool = { value: 'owner/repo-a\nowner/repo-b\nowner/repo-c' };
+  const randomizeRepo = { checked: true };
+  const repoSelect = {
+    value: '',
+    disabled: false,
+    options: [],
+    appendChild(option) { this.options.push(option); },
+    querySelector(selector) {
+      const match = selector.match(/option\[value="([^"]+)"\]/);
+      return match ? this.options.find(opt => opt.value === match[1]) || null : null;
+    }
+  };
+  const context = vm.createContext({
+    console,
+    Math,
+    document: {
+      createElement: tag => ({ tagName: tag, value: '', textContent: '' }),
+      addEventListener: () => {},
+      getElementById: id => {
+        const map = {
+          repoPool,
+          randomizeRepoPerApp: randomizeRepo,
+          ghRepo: repoSelect,
+          ghBaseBranch: { value: 'main' },
+          ghRepoManual: { value: '' }
+        };
+        return map[id] || null;
+      }
+    },
+    fetchGitHubRepos: async () => [
+      { full_name: 'owner/repo-a', private: true },
+      { full_name: 'owner/repo-b', private: true },
+      { full_name: 'owner/repo-c', private: true }
+    ],
+    loadBranchSelector: async () => {},
+    chrome: { storage: { local: { set: () => {} } } }
+  });
+  vm.runInContext(source.slice(source.indexOf('function parseRepoPool('), source.indexOf('function applyGitHubRepoSelection(')), context);
+  vm.runInContext(source.slice(source.indexOf('function applyGitHubRepoSelection('), source.indexOf('function buildQueuedApps(')), context);
+  vm.runInContext(source.slice(source.indexOf('async function loadRepoSelector('), source.indexOf('async function loadBranchSelector(')), context);
+  await context.loadRepoSelector('token');
+  assert.ok(['owner/repo-a', 'owner/repo-b', 'owner/repo-c'].includes(repoSelect.value));
+});
+
 async function generateVariant(gradlePath, gradle, existingBranch = false, baseBranchAdvances = false) {
   const originalPackage = 'com.taziggg100.doriac_cecile';
   const files = new Map([

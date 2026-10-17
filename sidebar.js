@@ -114,6 +114,21 @@ function parseRepoPool(rawValue, fallbackRepo = '') {
   return [...repoSet];
 }
 
+function chooseRandomRepoFromPool() {
+  const randomizeRepo = document.getElementById('randomizeRepoPerApp')?.checked;
+  const repoPool = parseRepoPool(
+    document.getElementById('repoPool')?.value || '',
+    document.getElementById('ghRepo')?.value || ''
+  );
+  if (!randomizeRepo || repoPool.length === 0) return null;
+
+  const selectedRepo = repoPool[Math.floor(Math.random() * repoPool.length)];
+  if (!selectedRepo) return null;
+
+  applyGitHubRepoSelection(selectedRepo);
+  return selectedRepo;
+}
+
 function applyGitHubRepoSelection(repo) {
   if (!repo) return;
   const repoSelect = document.getElementById('ghRepo');
@@ -3753,6 +3768,20 @@ async function loadRepoSelector(token) {
       opt.textContent = `${r.full_name}${r.private ? ' 🔒' : ''}`;
       select.appendChild(opt);
     });
+
+    const randomizeRepo = document.getElementById('randomizeRepoPerApp')?.checked;
+    const repoPool = parseRepoPool(document.getElementById('repoPool')?.value || '', savedRepo || '');
+    if (randomizeRepo && repoPool.length > 0) {
+      const selectedRepo = repoPool[Math.floor(Math.random() * repoPool.length)];
+      if (selectedRepo && select.querySelector(`option[value="${selectedRepo}"]`)) {
+        select.value = selectedRepo;
+        chrome.storage.local.set({ ghRepo: selectedRepo });
+        loadBranchSelector(token, selectedRepo);
+      }
+      select.disabled = false;
+      return;
+    }
+
     // Restore saved value if it exists
     if (savedRepo && select.querySelector(`option[value="${savedRepo}"]`)) {
       select.value = savedRepo;
