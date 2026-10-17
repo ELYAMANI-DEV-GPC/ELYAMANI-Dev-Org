@@ -6868,6 +6868,19 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
     }
     log(`Found ${accounts.length} developer account(s): ${accounts.map(a => a.name).join(', ')}`, 'success');
 
+    // Optional filter: only process accounts whose name matches one of the given lines
+    const filterRaw = (document.getElementById('consoleAccountFilter')?.value || '').trim();
+    if (filterRaw) {
+      const wanted = filterRaw.split('\n').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const before = accounts.length;
+      accounts = accounts.filter(a => wanted.some(w => a.name.toLowerCase().includes(w)));
+      const skipped = before - accounts.length;
+      log(`🎯 Filter active: ${accounts.length}/${before} account(s) selected${skipped ? ` (${skipped} skipped)` : ''}: ${accounts.map(a => a.name).join(', ') || 'NONE'}`, 'info');
+      if (accounts.length === 0) {
+        throw new Error(`No account matches the filter. Available accounts: see the list above.`);
+      }
+    }
+
     for (let i = 0; i < accounts.length; i++) {
       if (!consoleFetchRunning) { log('Stopped by user.', 'info'); break; }
       const acc = accounts[i];

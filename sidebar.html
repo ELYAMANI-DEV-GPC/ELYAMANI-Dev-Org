@@ -101,6 +101,9 @@
   <h2>📊 Console Reports</h2>
   <div class="section">
     <small>One click: scans every developer account in the Play Console account selector, then downloads per account: a CSV report (<b>AccountName_report.csv</b>), a dashboard screenshot (<b>AccountName_dashboard.png</b>) and a description (<b>AccountName_description.txt</b>) — plus <b>all_accounts_summary.csv</b> and <b>all_accounts_descriptions.txt</b>.</small>
+    <label style="margin-top:6px">Only these accounts (optional — one per line, partial name OK)</label>
+    <textarea id="consoleAccountFilter" style="height:52px" placeholder="ELYAMANI-DEV-GPC&#10;EOOrga"></textarea>
+    <small>Leave empty to process every account. Matching is case-insensitive and partial (e.g. "elyamani" matches "ELYAMANI-DEV-GPC").</small>
     <button id="fetchAllConsoleBtn" type="button">📊 Fetch all console</button>
     <div id="consoleReportResults"></div>
   </div>
