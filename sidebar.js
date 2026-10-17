@@ -6790,22 +6790,96 @@ function downloadDataUrl(filename, dataUrl) {
   a.remove();
 }
 
-// Open WhatsApp (web/app) with the account description pre-filled — user just presses Send.
-// Returns true if a window/tab was actually opened (false when blocked by popup blocker).
-function sendWhatsAppDescription(phone, text) {
+// Injected into the wa.me / web.whatsapp.com tab: wait for the chat to load,
+// then click the Send button automatically.
+function autoClickWhatsAppSend() {
+  return new Promise((resolve) => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    (async () => {
+      // wa.me redirects to web.whatsapp.com — wait for the send button to appear
+      const SEND_SELECTORS = [
+        '[data-icon="send"]',
+        'button[aria-label*="Send" i]',
+        'button[aria-label*="Envoyer" i]',
+        '[aria-label*="Send" i][role="button"]',
+        '[aria-label*="Envoyer" i][role="button"]',
+        'span[data-icon="send"]',
+        'div[role="button"][aria-label*="Send" i]',
+        'div[role="button"][aria-label*="Envoyer" i]'
+      ];
+      for (let w = 0; w < 90; w++) { // up to 45s
+        for (const sel of SEND_SELECTORS) {
+          const btn = document.querySelector(sel);
+          if (btn) {
+            const clickable = btn.closest('button, [role="button"], div') || btn;
+            clickable.click();
+            btn.click();
+            resolve({ sent: true, selector: sel, wait: w });
+            return;
+          }
+        }
+        // If WhatsApp shows "phone number invalid" or a login QR code, bail out
+        const bodyText = (document.body.innerText || '').toLowerCase();
+        if (bodyText.includes('phone number') && (bodyText.includes('invalid') || bodyText.includes('not on whatsapp'))) {
+          resolve({ sent: false, error: 'invalid-number' });
+          return;
+        }
+        if (document.querySelector('[data-testid="qrcode"], canvas[aria-label*="QR" i], .landing-qr')) {
+          resolve({ sent: false, error: 'login-required' });
+          return;
+        }
+        await sleep(500);
+      }
+      resolve({ sent: false, error: 'timeout' });
+    })();
+  });
+}
+
+// Open WhatsApp (web/app) with the account description pre-filled, then auto-click Send.
+// Returns { opened, sent, error }.
+async function sendWhatsAppDescription(phone, text) {
   const digits = (phone || '').replace(/[^0-9]/g, '');
-  if (!digits) return false;
+  if (!digits) return { opened: false, sent: false, error: 'no-number' };
   const url = `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
-  // window.open works from the side panel; chrome.tabs.create can silently fail there.
-  const win = window.open(url, '_blank');
-  if (win) return true;
-  // Popup blocked — fall back to chrome.tabs (background-capable path)
+
+  // Create the tab via chrome.tabs (more reliable than window.open for scripting injection)
+  let tab = null;
   try {
-    chrome.tabs.create({ url, active: true });
-    return true;
+    tab = await chrome.tabs.create({ url, active: true });
   } catch (_) {
-    return false;
+    const win = window.open(url, '_blank');
+    if (!win) return { opened: false, sent: false, error: 'popup-blocked' };
+    return { opened: true, sent: false, error: 'no-tab-handle' }; // opened but can't auto-click
   }
+  if (!tab || !tab.id) return { opened: true, sent: false, error: 'no-tab-handle' };
+
+  // Wait for wa.me → web.whatsapp.com redirect + page load, then inject the clicker
+  for (let attempt = 0; attempt < 24; attempt++) {
+    await sleep(1000);
+    try {
+      const info = await chrome.tabs.get(tab.id);
+      if (info.status !== 'complete') continue;
+      const result = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: autoClickWhatsAppSend
+      });
+      const r = result && result[0] && result[0].result;
+      if (r && r.sent) {
+        // Leave the tab open briefly so the send registers, then close it
+        await sleep(2500);
+        try { chrome.tabs.remove(tab.id); } catch (_) {}
+        return { opened: true, sent: true };
+      }
+      if (r && r.error && r.error !== 'timeout') {
+        return { opened: true, sent: false, error: r.error };
+      }
+      // timeout on this attempt — page may still be redirecting; retry
+    } catch (_) {
+      // Tab closed by user or navigated away
+      return { opened: true, sent: false, error: 'tab-closed' };
+    }
+  }
+  return { opened: true, sent: false, error: 'timeout' };
 }
 
 // Build a human-readable description of one developer account from its report
@@ -7008,12 +7082,16 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
         const descFile = baseName + '_description.txt';
         downloadTextFile(descFile, description);
 
-        // 6) Optional: open WhatsApp with this description pre-filled
+        // 6) Optional: open WhatsApp with this description pre-filled and auto-click Send
         const waNumber = (document.getElementById('whatsAppNumber')?.value || '').trim();
         const waSend = document.getElementById('whatsAppSend')?.checked;
         if (waSend && waNumber) {
-          const sent = sendWhatsAppDescription(waNumber, description);
-          if (sent) log(`  📱 WhatsApp opened for ${acc.name} — press Send in the new tab`, 'info');
+          const wa = await sendWhatsAppDescription(waNumber, description);
+          if (wa.sent) log(`  📱 WhatsApp sent for ${acc.name} ✅`, 'success');
+          else if (wa.opened && wa.error === 'login-required') log(`  ⚠️ WhatsApp Web not logged in — scan the QR code once, then retry`, 'error');
+          else if (wa.opened && wa.error === 'invalid-number') log(`  ⚠️ WhatsApp: invalid number ${waNumber}`, 'error');
+          else if (wa.opened && wa.error === 'no-tab-handle') log(`  ⚠️ WhatsApp opened but auto-click unavailable — press Send manually`, 'info');
+          else if (wa.opened) log(`  ⚠️ WhatsApp auto-send timed out — tab left open, press Send`, 'info');
           else log(`  ⚠️ WhatsApp popup blocked — allow popups for this page, then retry`, 'error');
         } else if (waNumber && !waSend) {
           // checkbox off — silent

@@ -4,7 +4,7 @@
   "version": "1.0",
   "description": "Batch create draft apps on Google Play Console",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "sidePanel"],
-  "host_permissions": ["https://play.google.com/*", "https://generativelanguage.googleapis.com/*", "https://api.github.com/*"],
+  "host_permissions": ["https://play.google.com/*", "https://generativelanguage.googleapis.com/*", "https://api.github.com/*", "https://wa.me/*", "https://web.whatsapp.com/*"],
   "background": {
     "service_worker": "background.js"
   },
