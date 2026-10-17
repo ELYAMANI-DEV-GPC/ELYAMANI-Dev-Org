@@ -48,6 +48,222 @@ const generator = source.slice(
   source.indexOf('async function runFlutterVariantBuild(')
 );
 
+const activityLogSource = source.slice(source.indexOf('function extractAccountCreatedFromActivityLog('), source.indexOf('// Paginate the activity log backwards in 90-day windows until "Account created" is found.'));
+
+async function readAccountCreatedDate(text) {
+  const context = vm.createContext({
+    document: {
+      body: { innerText: text },
+      getElementById: () => null,
+      querySelectorAll: () => [{ innerText: text }]
+    },
+    setTimeout: callback => callback(),
+    console
+  });
+  vm.runInContext(activityLogSource, context);
+  const result = await context.extractAccountCreatedFromActivityLog();
+  return result.createdDate;
+}
+
+test('detect account creation in Arabic and French activity-log text', async () => {
+  assert.equal(await readAccountCreatedDate('تم إنشاء الحساب في 14 فبراير 2024'), '14 فبراير 2024');
+  assert.equal(await readAccountCreatedDate('Compte créé le 14 mai 2024'), '14 mai 2024');
+});
+
+test('prefer the date nearest to the Account created marker over older history', async () => {
+  const text = '12 Jan 2019\n\nAccount details: Account created\n10 changed\n\nNew account date: 14 mai 2024\nOther event: 03 Jan 2020';
+  assert.equal(await readAccountCreatedDate(text), '14 mai 2024');
+});
+
+test('ignore drilldown details and prefer the activity row date near the Account created marker', async () => {
+  const drilldown = { innerText: 'Account details: Account created\n10 changed\nOther event 2020-01-01', closest: () => ({ tagName: 'changes-drilldown-view' }) };
+  const activityRow = { innerText: 'Account created 14 May 2024', closest: () => null };
+  const context = vm.createContext({
+    document: {
+      body: { innerText: 'Account details: Account created\n10 changed\nOther event 2020-01-01\nAccount created 14 May 2024' },
+      getElementById: () => null,
+      querySelectorAll: () => [drilldown, activityRow]
+    },
+    setTimeout: callback => callback(),
+    console
+  });
+  vm.runInContext(activityLogSource, context);
+  const result = await context.extractAccountCreatedFromActivityLog();
+  assert.equal(result.createdDate, '14 May 2024');
+});
+
+test('set the activity log page size to 30 rows before scanning', async () => {
+  let selected = null;
+  const dropdown = {
+    innerText: 'Show rows: 30',
+    textContent: 'Show rows: 30',
+    getAttribute: () => 'Show rows: 30',
+    getBoundingClientRect: () => ({ left: 10, top: 20, width: 120, height: 20 }),
+    dispatchEvent: () => {},
+    click: () => { selected = 'dropdown'; }
+  };
+  const option = {
+    innerText: '30',
+    textContent: '30',
+    getAttribute: () => '30',
+    getBoundingClientRect: () => ({ left: 10, top: 40, width: 120, height: 20 }),
+    dispatchEvent: () => {},
+    click: () => { selected = '30'; }
+  };
+  const context = vm.createContext({
+    document: {
+      querySelectorAll: selector => {
+        if (selector.includes('material-dropdown-select')) return [dropdown];
+        if (selector.includes('material-select-item') || selector.includes('[role="option"]') || selector.includes('li') || selector.includes('button')) return [option];
+        return [];
+      },
+      getElementById: () => null,
+      body: { innerText: '' }
+    },
+    window: {},
+    MouseEvent: class { constructor() {} },
+    setTimeout: callback => callback(),
+    console
+  });
+  vm.runInContext(source.slice(source.indexOf('function setActivityLogPageSizeTo30('), source.indexOf('// ===== INJECTED: scan the activity-log page for the "Account created" event =====')), context);
+  const result = await context.setActivityLogPageSizeTo30();
+  assert.equal(result, true);
+  assert.equal(selected, '30');
+});
+
+test('continue paging through the current activity window before moving to older activity', async () => {
+  const calls = [];
+  const dummyChrome = {
+    scripting: {
+      executeScript: async ({ func }) => {
+        calls.push(func.name);
+        if (func.name === 'clickNextActivityLogPage') return [{ result: calls.length > 2 }];
+        return [{ result: { createdDate: null, rowCount: 20 } }];
+      }
+    }
+  };
+  const context = vm.createContext({
+    chrome: {
+      tabs: { update: async () => {} },
+      scripting: {
+        executeScript: async ({ func }) => {
+          calls.push(func.name);
+          if (func.name === 'clickNextActivityLogPage') return [{ result: calls.length > 2 }];
+          return [{ result: { createdDate: null, rowCount: 20 } }];
+        }
+      }
+    },
+    setTimeout: callback => callback(),
+    sleep: async () => {},
+    waitForTabLoad: async () => {},
+    console
+  });
+  vm.runInContext(source.slice(source.indexOf('function setActivityLogPageSizeTo30('), source.indexOf('function extractAccountCreatedFromActivityLog(')), context);
+  vm.runInContext(source.slice(source.indexOf('function clickNextActivityLogPage('), source.indexOf('function extractAccountCreatedFromActivityLog(')), context);
+  vm.runInContext(source.slice(source.indexOf('function extractAccountCreatedFromActivityLog('), source.indexOf('// Paginate the activity log backwards in 90-day windows until "Account created" is found.')), context);
+  const fn = source.slice(source.indexOf('async function findAccountCreatedDate('), source.indexOf('// ===== Sidebar-side helpers for the reports ====='));
+  vm.runInContext(fn, context);
+  const result = await context.findAccountCreatedDate({ id: 123 }, 'dev-42');
+  assert.equal(result, null);
+  assert.ok(calls.includes('clickNextActivityLogPage'));
+});
+
+test('accept a WhatsApp community invite link as a valid target', async () => {
+  const input = 'https://chat.whatsapp.com/FocviRkWsgr89Tz5DVdy2J';
+  const isInvite = /https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/i.test(input);
+  assert.equal(isInvite, true);
+  const normalized = input.match(/https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/i)[0];
+  assert.equal(normalized, 'https://chat.whatsapp.com/FocviRkWsgr89Tz5DVdy2J');
+});
+
+test('parse multiple WhatsApp targets from one textarea', () => {
+  const sourceText = '+212600000001\n+212600000002\nhttps://chat.whatsapp.com/FocviRkWsgr89Tz5DVdy2J';
+  const parsed = sourceText.split(/\r?\n|,|;/).map(v => v.trim()).filter(Boolean).filter(line => /https?:\/\/chat\.whatsapp\.com\//i.test(line) || /\d/.test(line));
+  assert.deepEqual(parsed, ['+212600000001', '+212600000002', 'https://chat.whatsapp.com/FocviRkWsgr89Tz5DVdy2J']);
+});
+
+test('pick distinct random theme colors from the palette', () => {
+  const palette = ['#8BC34A', '#558B2F', '#1565C0', '#FF9800', '#E91E63', '#00BCD4'];
+  const context = vm.createContext({ Math, console });
+  vm.runInContext(source.slice(source.indexOf('// Theme color palette'), source.indexOf('const generatedPackageNames')), context);
+  const result = context.pickRandomPaletteColors(3, palette, () => 0.9);
+  assert.ok(Array.isArray(result));
+  assert.equal(result.length, 3);
+  assert.ok(new Set(result).size === 3);
+  assert.ok(result.every(color => palette.includes(color)));
+});
+
+test('retry failed app tasks before giving up', async () => {
+  const context = vm.createContext({
+    Math,
+    console,
+    setTimeout: callback => callback(),
+    chrome: { storage: { local: { set: () => {} } } },
+    document: { getElementById: () => null }
+  });
+  vm.runInContext(source.slice(source.indexOf('// Theme color palette'), source.indexOf('const generatedPackageNames')), context);
+  let attempts = 0;
+  const result = await context.executeWithRetry('Demo App', async () => {
+    attempts += 1;
+    if (attempts < 2) throw new Error('temporary failure');
+    return 'done';
+  }, () => {});
+  assert.equal(result, 'done');
+  assert.equal(attempts, 2);
+});
+
+test('triggerAndWait can skip polling when the backend build has already started', async () => {
+  const calls = [];
+  const context = vm.createContext({
+    Math,
+    console,
+    setTimeout: callback => callback(),
+    crypto: { randomUUID: () => 'test-run-id' },
+    fetch: async (url, opts = {}) => {
+      calls.push({ url, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null });
+      if (url.includes('/actions/workflows/flutter-build.yml/dispatches')) {
+        return { status: 204, json: async () => ({}) };
+      }
+      throw new Error(`unexpected polling call: ${url}`);
+    }
+  });
+  vm.runInContext(source.slice(source.indexOf('async function triggerAndWait('), source.indexOf('function parseAndroidLauncherManifest(')), context);
+  const result = await context.triggerAndWait('token', 'owner/repo', 'flutter-build.yml', 'main', { publish_to_play: 'true' }, 'Build', () => {}, false);
+  assert.equal(result, true);
+  assert.equal(calls.filter(call => call.url.includes('/dispatches')).length, 1);
+  assert.equal(calls.filter(call => call.url.includes('/actions/runs')).length, 0);
+});
+
+test('build app queue from publish count and random repo pool', () => {
+  const context = vm.createContext({
+    console,
+    Math,
+    crypto: require('node:crypto'),
+    document: {
+      getElementById: id => {
+        const map = {
+          appNames: { value: 'Alpha\nBeta' },
+          appPublishCount: { value: '4' },
+          repoPool: { value: 'owner/repo-a\nowner/repo-b' },
+          ghRepo: { value: 'owner/repo-a' },
+          randomizeRepoPerApp: { checked: true },
+          ghRandomColorsPerApp: { checked: true }
+        };
+        return map[id] || null;
+      }
+    },
+    chrome: { storage: { local: { set: () => {} } } },
+    loadBranchSelector: () => {}
+  });
+  vm.runInContext(source.slice(source.indexOf('function generateRandomPackageSegment('), source.indexOf('// Per-window state persistence')), context);
+  const result = context.buildQueuedApps();
+  assert.equal(result.length, 4);
+  assert.equal(result[0].name, 'Alpha');
+  assert.equal(result[2].name, 'App 3');
+  assert.ok(result.every(app => /^(owner\/repo-a|owner\/repo-b)$/.test(app.repo)));
+  assert.ok(result.every(app => typeof app.pkg === 'string' && app.pkg.length > 0));
+});
+
 async function generateVariant(gradlePath, gradle, existingBranch = false, baseBranchAdvances = false) {
   const originalPackage = 'com.taziggg100.doriac_cecile';
   const files = new Map([

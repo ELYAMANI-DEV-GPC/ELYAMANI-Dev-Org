@@ -26,24 +26,142 @@ function generateDefaultPackageName() {
 }
 
 // Theme color palette used for variant randomization
-const VARIANT_COLOR_PALETTE = ['#8BC34A', '#558B2F', '#1565C0'];
+const VARIANT_COLOR_PALETTE = ['#8BC34A', '#558B2F', '#1565C0', '#FF9800', '#E91E63', '#00BCD4', '#7E57C2', '#4CAF50', '#FFA000', '#00897B'];
 
-// Shuffle the palette and assign one random color to each variant color input
-function randomizeVariantColors() {
-  const shuffled = [...VARIANT_COLOR_PALETTE];
+function shufflePalette(palette, rng = Math.random) {
+  const shuffled = [...palette];
   for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rng() * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
+  return shuffled;
+}
+
+function pickRandomPaletteColors(count = 3, palette = VARIANT_COLOR_PALETTE, rng = Math.random) {
+  if (!Array.isArray(palette) || palette.length === 0) return [];
+  const unique = [];
+  const shuffled = shufflePalette(palette, rng);
+  for (const color of shuffled) {
+    if (!unique.includes(color)) unique.push(color);
+    if (unique.length >= Math.min(count, palette.length)) break;
+  }
+  if (unique.length < count) {
+    for (const color of palette) {
+      if (!unique.includes(color)) unique.push(color);
+      if (unique.length >= count) break;
+    }
+  }
+  return unique.slice(0, count);
+}
+
+globalThis.pickRandomPaletteColors = pickRandomPaletteColors;
+
+// Shuffle the palette and assign a different random color to each variant color input
+function randomizeVariantColors() {
+  const chosen = pickRandomPaletteColors(3, VARIANT_COLOR_PALETTE);
+  const fallback = VARIANT_COLOR_PALETTE[0] || '#8BC34A';
   const primary = document.getElementById('ghPrimaryColor');
   const dark = document.getElementById('ghDarkColor');
   const iconBg = document.getElementById('ghIconBg');
-  if (primary) primary.value = shuffled[0];
-  if (dark) dark.value = shuffled[1];
-  if (iconBg) iconBg.value = shuffled[2];
+  if (primary) primary.value = chosen[0] || fallback;
+  if (dark) dark.value = chosen[1] || fallback;
+  if (iconBg) iconBg.value = chosen[2] || fallback;
 }
 
+async function executeWithRetry(appName, action, onRetry = async () => {}, maxRetries = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await action(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxRetries) {
+        throw error;
+      }
+      if (typeof onRetry === 'function') {
+        try {
+          await onRetry(attempt, error);
+        } catch (_) {
+          // ignore retry hook issues; main action is still retried
+        }
+      }
+      if (typeof log === 'function') {
+        log(`⚠️ "${appName}" failed on attempt ${attempt}/${maxRetries}: ${error.message}. Retrying...`, 'error');
+      } else {
+        console.warn(`Retrying "${appName}" after failure:`, error);
+      }
+      if (typeof sleep === 'function') {
+        await sleep(3000);
+      }
+    }
+  }
+  throw lastError || new Error(`"${appName}" failed after ${maxRetries} attempts`);
+}
+globalThis.executeWithRetry = executeWithRetry;
+
 const generatedPackageNames = new Map();
+
+function parseRepoPool(rawValue, fallbackRepo = '') {
+  const raw = rawValue || '';
+  const repoSet = new Set();
+  for (const item of raw.split(/\r?\n|,|;/)) {
+    const value = item.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\/$/, '');
+    if (value) repoSet.add(value);
+  }
+  if (fallbackRepo && !repoSet.has(fallbackRepo.trim())) {
+    repoSet.add(fallbackRepo.trim());
+  }
+  return [...repoSet];
+}
+
+function applyGitHubRepoSelection(repo) {
+  if (!repo) return;
+  const repoSelect = document.getElementById('ghRepo');
+  const manualInput = document.getElementById('ghRepoManual');
+  if (repoSelect && !repoSelect.querySelector(`option[value="${repo}"]`)) {
+    const option = document.createElement('option');
+    option.value = repo;
+    option.textContent = repo + ' (auto)';
+    repoSelect.appendChild(option);
+  }
+  if (repoSelect) repoSelect.value = repo;
+  if (manualInput) manualInput.value = '';
+  chrome.storage.local.set({ ghRepo: repo });
+  const token = document.getElementById('ghToken')?.value?.trim();
+  if (token) loadBranchSelector(token, repo);
+}
+
+function buildQueuedApps() {
+  const countInput = document.getElementById('appPublishCount');
+  const count = Math.max(1, parseInt(countInput && countInput.value ? countInput.value : '1', 10) || 1);
+  const configuredApps = getAppEntries(false);
+  const queue = [];
+
+  for (let i = 0; i < count; i++) {
+    if (i < configuredApps.length) {
+      queue.push({ ...configuredApps[i] });
+      continue;
+    }
+    queue.push({ name: `App ${i + 1}`, pkg: generateDefaultPackageName() });
+  }
+
+  const repoPool = parseRepoPool(document.getElementById('repoPool')?.value || '', document.getElementById('ghRepo')?.value || '');
+  const randomizeRepo = document.getElementById('randomizeRepoPerApp')?.checked;
+  if (randomizeRepo && repoPool.length > 0) {
+    return queue.map((app, index) => ({
+      ...app,
+      repo: repoPool[Math.floor(Math.random() * repoPool.length)],
+      generatedName: app.name || `App ${index + 1}`
+    }));
+  }
+
+  const fallbackRepo = repoPool[0] || document.getElementById('ghRepo')?.value || '';
+  return queue.map((app, index) => ({
+    ...app,
+    repo: fallbackRepo,
+    generatedName: app.name || `App ${index + 1}`
+  }));
+}
 
 function parseAppLine(line, index) {
   const separator = line.indexOf('|');
@@ -493,12 +611,21 @@ async function configureApp(tab, devId, appId, appName, config, delay) {
 }
 
 document.getElementById('startBtn').addEventListener('click', async () => {
-  const apps = getAppEntries(true);
+  const queuedApps = buildQueuedApps();
+  const apps = queuedApps.map(({ name, pkg }) => ({ name, pkg }));
 
   if (apps.length === 0) {
     log('Enter at least one app name', 'error');
     return;
   }
+
+  const appNamesInput = document.getElementById('appNames');
+  if (appNamesInput) {
+    appNamesInput.value = apps.map(({ name, pkg }) => `${name}|${pkg}`).join('\n');
+  }
+
+  const queueRepo = queuedApps[0]?.repo || '';
+  if (queueRepo) applyGitHubRepoSelection(queueRepo);
 
   const language = document.getElementById('language').value;
   const appType = document.getElementById('appType').value;
@@ -570,61 +697,60 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     }
 
     const { name, pkg } = apps[i];
+    const queuedApp = queuedApps[i] || {};
+    if (queuedApp.repo) applyGitHubRepoSelection(queuedApp.repo);
     const progress = ((i + 1) / apps.length * 100).toFixed(0);
     document.getElementById('progressBar').style.width = progress + '%';
 
     log(`[${i + 1}/${apps.length}] Creating "${name}"${pkg ? ' (' + pkg + ')' : ''}...`, 'info');
 
-    try {
-      const ghToken = document.getElementById('ghToken').value.trim();
-      const ghRepo = document.getElementById('ghRepo').value.trim();
-      const listingCopy = ghToken && ghRepo
-        ? await prepareAppListingCopy(ghToken, ghRepo, document.getElementById('ghBaseBranch').value.trim() || 'main', name, pkg, {
-            shortDescription: document.getElementById('shortDesc').value.trim(),
-            fullDescription: document.getElementById('fullDesc').value.trim()
-          }, log)
-        : {
-            title: name.substring(0, 30),
-            shortDescription: document.getElementById('shortDesc').value.trim(),
-            fullDescription: document.getElementById('fullDesc').value.trim()
-          };
-      const appConfig = config ? {
-        ...config,
-        appName: listingCopy.title,
-        shortDesc: listingCopy.shortDescription,
-        fullDesc: listingCopy.fullDescription
-      } : null;
+    await executeWithRetry(
+      name,
+      async () => {
+        const ghToken = document.getElementById('ghToken').value.trim();
+        const ghRepo = document.getElementById('ghRepo').value.trim();
+        const listingCopy = ghToken && ghRepo
+          ? await prepareAppListingCopy(ghToken, ghRepo, document.getElementById('ghBaseBranch').value.trim() || 'main', name, pkg, {
+              shortDescription: document.getElementById('shortDesc').value.trim(),
+              fullDescription: document.getElementById('fullDesc').value.trim()
+            }, log)
+          : {
+              title: name.substring(0, 30),
+              shortDescription: document.getElementById('shortDesc').value.trim(),
+              fullDescription: document.getElementById('fullDesc').value.trim()
+            };
+        const appConfig = config ? {
+          ...config,
+          appName: listingCopy.title,
+          shortDesc: listingCopy.shortDescription,
+          fullDesc: listingCopy.fullDescription
+        } : null;
 
-      // Step 1: Navigate to create app page
-      const createUrl = `https://play.google.com/console/u/0/developers/${devId}/app/create`;
-      await chrome.tabs.update(tab.id, { url: createUrl });
+        const createUrl = `https://play.google.com/console/u/0/developers/${devId}/app/create`;
+        await chrome.tabs.update(tab.id, { url: createUrl });
+        await waitForTabLoad(tab.id);
+        await sleep(2000);
 
-      // Step 2: Wait for page to fully load
-      await waitForTabLoad(tab.id);
-      await sleep(2000); // initial wait
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: fillAndSubmitForm,
+          args: [listingCopy.title, pkg, appType, pricing, false]
+        });
 
-      // Step 3: Inject and run the form-filling script (it polls for splash to go away)
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: fillAndSubmitForm,
-        args: [listingCopy.title, pkg, appType, pricing, false]
-      });
-
-      const result = results[0].result;
-      if (result === true) {
+        const result = results[0].result;
+        if (result !== true) {
+          throw new Error(`Form submission returned: ${result}`);
+        }
         log(`✅ "${name}" — form submitted`, 'success');
 
-        // Step 3.5: Auto-generate privacy policy URL before configuring
         if (document.getElementById('autoPrivacyPolicy').checked && isRunning) {
           let ghToken = document.getElementById('ghToken').value.trim();
           let ghRepo = document.getElementById('ghRepo').value.trim();
-          // Fallback: read from storage if input is empty
           if (!ghToken || !ghRepo) {
             const stored = await new Promise(r => chrome.storage.local.get(['ghToken', 'ghRepo'], r));
             if (!ghToken && stored.ghToken) ghToken = stored.ghToken;
             if (!ghRepo && stored.ghRepo) ghRepo = stored.ghRepo;
           }
-          // If still no repo but have token, derive owner from token for privacy-policies repo
           if (ghToken && !ghRepo) {
             try {
               const u = await fetch('https://api.github.com/user', { headers: { Authorization: `token ${ghToken}` } });
@@ -645,9 +771,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
           }
         }
 
-        // Step 4: Auto-configure if enabled
         if (autoConfig && isRunning) {
-          // Wait for redirect after creation — poll for URL change up to 15s
           let appId = null;
           for (let w = 0; w < 15; w++) {
             await sleep(1000);
@@ -661,43 +785,31 @@ document.getElementById('startBtn').addEventListener('click', async () => {
           }
 
           if (!appId) {
-            // Fallback: go to app list and find the app
             log('  Could not extract app ID from URL, searching app list...', 'info');
             const listUrl = `https://play.google.com/console/u/0/developers/${devId}/app-list`;
             await chrome.tabs.update(tab.id, { url: listUrl });
             await waitForTabLoad(tab.id);
             await sleep(6000);
-
-            const mapResult = await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: extractAppList
-            });
+            const mapResult = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAppList });
             const appMap = mapResult[0].result;
-
-            // Log found apps for debugging
             const entries = Object.entries(appMap);
             log(`  Found ${entries.length} app(s) in list`, 'info');
             for (const [key, val] of entries) {
               log(`    📱 "${key}" → id=${val.id}, pkg=${val.pkg || 'n/a'}`, 'info');
             }
-
-            // Try exact name match
             for (const [key, val] of entries) {
               if (key.toLowerCase().trim() === name.toLowerCase().trim()) { appId = val.id; break; }
             }
-            // Try partial name match
             if (!appId) {
               for (const [key, val] of entries) {
                 if (key.toLowerCase().includes(name.toLowerCase()) || name.toLowerCase().includes(key.toLowerCase())) { appId = val.id; break; }
               }
             }
-            // Try package match
             if (!appId && pkg) {
               for (const [key, val] of entries) {
                 if (val.pkg && (val.pkg.includes(pkg) || pkg.includes(val.pkg))) { appId = val.id; break; }
               }
             }
-            // Last resort: pick the most recently added app (last in list)
             if (!appId && entries.length > 0) {
               appId = entries[entries.length - 1][1].id;
               log(`  Using last app in list as fallback: ${entries[entries.length - 1][0]}`, 'info');
@@ -707,17 +819,13 @@ document.getElementById('startBtn').addEventListener('click', async () => {
           if (appId) {
             await configureApp(tab, devId, appId, listingCopy.title, appConfig, delay);
           } else {
-            log(`  ❌ Could not find "${name}" in app list for configuration`, 'error');
+            throw new Error(`Could not find "${name}" in app list for configuration`);
           }
         }
 
-        // Step 5: Auto GitHub Build & Publish if enabled
         const autoBuild = document.getElementById('autoBuild').checked;
         if (autoBuild && isRunning) {
-          // Shuffle theme colors from the palette for this app if enabled
-          const randomPerApp = document.getElementById('ghRandomColorsPerApp');
-          if (randomPerApp && randomPerApp.checked) randomizeVariantColors();
-          // Generate default package name if not provided
+          randomizeVariantColors();
           let buildPkg = pkg;
           if (!buildPkg) {
             buildPkg = generateDefaultPackageName();
@@ -745,16 +853,13 @@ document.getElementById('startBtn').addEventListener('click', async () => {
               screenshots: playScreenshotAssets,
               publishToPlay,
               track: document.getElementById('ghTrack').value || 'internal'
-            }, log, flutterWorkflowReady);
+            }, log, flutterWorkflowReady, false);
             if (buildOk) log(`  🎉 "${name}" Flutter build completed!`, 'success');
             else log(`  ⚠️ "${name}" Flutter build failed. Check GitHub Actions.`, 'error');
           } else {
-            // Use package name as branch name
             const branchName = buildPkg;
             log(`  🚀 Auto-build: setup-variant → build for branch "${branchName}"`, 'log-info');
-
             const baseBranch = document.getElementById('ghBaseBranch').value.trim() || 'apkaward';
-            // Get repo default branch (where setup-variant.yml lives)
             let defaultBranch = 'main';
             try {
               const repoInfo = await fetch(`https://api.github.com/repos/${ghRepo}`, {
@@ -774,15 +879,11 @@ document.getElementById('startBtn').addEventListener('click', async () => {
               icon_bg_color: ghIconBg,
               base_branch: baseBranch
             };
-            const setupOk = await triggerAndWait(ghToken, ghRepo, 'setup-variant.yml', defaultBranch, setupInputs, `Setup ${name}`, log);
+            const setupOk = await triggerAndWait(ghToken, ghRepo, 'setup-variant.yml', defaultBranch, setupInputs, `Setup ${name}`, log, false);
             if (setupOk) {
               log(`  ✅ Variant setup done for "${name}". Syncing workflows...`, 'success');
-              // Push workflow files (build.yml) to variant branch so build triggers
               await pushWorkflowsToBranch(ghToken, ghRepo, branchName, log);
-              // Push custom logo if uploaded
               await pushLogoToBranch(ghToken, ghRepo, branchName, log);
-              // Build is auto-triggered by push to the new branch (branches: ['**'])
-              // Just wait for it to appear and track it
               await new Promise(r => setTimeout(r, 8000));
               log(`  🔄 Waiting for build on ${branchName}...`, 'info');
               let buildRunId = null;
@@ -792,10 +893,8 @@ document.getElementById('startBtn').addEventListener('click', async () => {
                   headers: { 'Authorization': `token ${ghToken}`, 'Accept': 'application/vnd.github.v3+json' }
                 }).then(r => r.json());
                 const runs = runsRes.workflow_runs || [];
-                // Find any run that hasn't completed (covers in_progress, queued, waiting, pending, requested)
                 const activeRun = runs.find(r => r.status !== 'completed');
                 if (activeRun) { buildRunId = activeRun.id; break; }
-                // If all runs completed, the build may have finished already
                 if (runs.length > 0 && runs.every(r => r.status === 'completed')) {
                   buildRunId = runs[0].id; buildAlreadyDone = true; break;
                 }
@@ -832,20 +931,23 @@ document.getElementById('startBtn').addEventListener('click', async () => {
                 log(`  ⚠️ Could not find build run. Check GitHub Actions manually.`, 'error');
               }
             } else {
-              log(`  ❌ Variant setup failed for "${name}".`, 'error');
+              throw new Error(`Variant setup failed for "${name}".`);
             }
           }
         }
-      } else {
-        log(`❌ "${name}" — ${result}`, 'error');
+
+        await sleep(delay * 1000);
+        return true;
+      },
+      async () => {
+        randomizeVariantColors();
+        const repoPool = parseRepoPool(document.getElementById('repoPool')?.value || '', document.getElementById('ghRepo')?.value || '');
+        if (repoPool.length > 0) {
+          const nextRepo = repoPool[Math.floor(Math.random() * repoPool.length)];
+          if (nextRepo) applyGitHubRepoSelection(nextRepo);
+        }
       }
-
-      // Wait before next app
-      await sleep(delay * 1000);
-
-    } catch (err) {
-      log(`❌ "${name}" error: ${err.message}`, 'error');
-    }
+    );
   }
 
   log('Done!', 'success');
@@ -4584,9 +4686,11 @@ async function initializeBuildHistory() {
   renderBuildHistory();
 }
 
-// Global helper: trigger a GitHub Actions workflow and poll until completion
-async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
+// Global helper: trigger a GitHub Actions workflow and optionally poll until completion.
+// In the queue flow we fire-and-move-on once the backend run is started, because the actual build continues in GitHub.
+async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn, waitForCompletion = true) {
   logFn = logFn || buildLog;
+  const recordHistory = typeof recordBuildHistory === 'function' ? recordBuildHistory : async () => {};
   logFn(`[${label}] Triggering ${wfFile}...`, 'log-info');
 
   const body = { ref };
@@ -4610,12 +4714,17 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
 
   if (triggerRes.status !== 204) {
     const err = await triggerRes.json().catch(() => ({}));
-    await recordBuildHistory({ ...history, status: 'failed', error: err.message || String(triggerRes.status) });
+    await recordHistory({ ...history, status: 'failed', error: err.message || String(triggerRes.status) });
     logFn(`[${label}] Trigger failed: ${err.message || triggerRes.status}`, 'log-error');
     return false;
   }
   logFn(`[${label}] Triggered!`, 'log-success');
-  await recordBuildHistory({ ...history, status: 'queued' });
+  await recordHistory({ ...history, status: 'queued' });
+
+  if (!waitForCompletion) {
+    logFn(`[${label}] Background build started; moving to the next draft now.`, 'log-info');
+    return true;
+  }
 
   // Wait for run to appear
   await new Promise(r => setTimeout(r, 5000));
@@ -4638,12 +4747,12 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
   }
 
   if (!runId) {
-    await recordBuildHistory({ key: historyKey, status: 'unknown' });
+    await recordHistory({ key: historyKey, status: 'unknown' });
     logFn(`[${label}] Could not find running workflow.`, 'log-error');
     return false;
   }
   logFn(`[${label}] Run #${runId} started`, 'log-success');
-  await recordBuildHistory({ key: historyKey, runId, status: 'running' });
+  await recordHistory({ key: historyKey, runId, status: 'running' });
 
   // Poll until done
   for (let i = 0; i < 60; i++) {
@@ -4654,7 +4763,7 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
     );
     const run = await runRes.json();
     if (run.status === 'completed') {
-      await recordBuildHistory({ key: historyKey, conclusion: run.conclusion, status: run.conclusion === 'success' ? 'completed' : 'failed' });
+      await recordHistory({ key: historyKey, conclusion: run.conclusion, status: run.conclusion === 'success' ? 'completed' : 'failed' });
       if (run.conclusion === 'success') {
         logFn(`[${label}] Completed successfully!`, 'log-success');
         return true;
@@ -4665,7 +4774,7 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
     }
     logFn(`[${label}] Running... (${Math.floor((i + 1) * 0.5)}min)`, 'log-info');
   }
-  await recordBuildHistory({ key: historyKey, status: 'unknown' });
+  await recordHistory({ key: historyKey, status: 'unknown' });
   logFn(`[${label}] Timed out`, 'log-error');
   return false;
 }
@@ -5575,6 +5684,7 @@ async function createFlutterVariant(token, repo, baseBranch, branch, options) {
     return data;
   };
 
+  const fallbackSourceBranch = 'main';
   const variantRefPath = `/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`;
   const variantRefResponse = await fetch(`https://api.github.com${variantRefPath}`, { headers });
   let variantExists = variantRefResponse.ok;
@@ -5584,8 +5694,24 @@ async function createFlutterVariant(token, repo, baseBranch, branch, options) {
     const error = await variantRefResponse.json().catch(() => ({}));
     throw new Error(error.message || `Could not inspect variant branch (${variantRefResponse.status}).`);
   }
-  const sourceBranch = variantExists ? branch : baseBranch;
-  const sourceRef = variantRef || await api(`/repos/${repo}/git/ref/heads/${encodeURIComponent(sourceBranch)}`);
+
+  const sourceBranch = variantExists ? branch : baseBranch || fallbackSourceBranch;
+  let sourceRef;
+  try {
+    sourceRef = variantRef || await api(`/repos/${repo}/git/ref/heads/${encodeURIComponent(sourceBranch)}`);
+  } catch (error) {
+    if (sourceBranch !== fallbackSourceBranch) {
+      try {
+        const repoInfo = await api(`/repos/${repo}`);
+        const defaultBranch = repoInfo.default_branch || fallbackSourceBranch;
+        sourceRef = await api(`/repos/${repo}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
+      } catch {
+        throw new Error(`Base branch "${sourceBranch}" was not found in ${repo}. Set a valid branch in the GitHub base branch field or keep the default main branch.`);
+      }
+    } else {
+      throw new Error(`Base branch "${sourceBranch}" was not found in ${repo}. Set a valid branch in the GitHub base branch field or keep the default main branch.`);
+    }
+  }
   const sourceCommit = await api(`/repos/${repo}/git/commits/${sourceRef.object.sha}`);
   const treeData = await api(`/repos/${repo}/git/trees/${sourceCommit.tree.sha}?recursive=1`);
   if (treeData.truncated) throw new Error('Repository tree is too large to inspect safely.');
@@ -5781,7 +5907,7 @@ async function createFlutterVariant(token, repo, baseBranch, branch, options) {
   };
 }
 
-async function runFlutterVariantBuild(token, repo, baseBranch, options, logFn = buildLog, workflowReady = false) {
+async function runFlutterVariantBuild(token, repo, baseBranch, options, logFn = buildLog, workflowReady = false, waitForCompletion = true) {
   const applicationId = options.applicationId;
   const primaryColor = document.getElementById('ghPrimaryColor').value.trim() || '#8BC34A';
   const secondaryColor = document.getElementById('ghDarkColor').value.trim() || '#558B2F';
@@ -5821,7 +5947,7 @@ async function runFlutterVariantBuild(token, repo, baseBranch, options, logFn = 
   return triggerAndWait(token, repo, 'flutter-build.yml', applicationId, {
     publish_to_play: options.publishToPlay ? 'true' : 'false',
     track: options.track
-  }, `Flutter AAB ${applicationId}`, logFn);
+  }, `Flutter AAB ${applicationId}`, logFn, waitForCompletion);
 }
 
 function initializeWorkspaceNavigation() {
@@ -6702,6 +6828,78 @@ function extractAccountAppsReport() {
   });
 }
 
+// ===== INJECTED: force the activity log to show 30 rows before we parse it =====
+function setActivityLogPageSizeTo30() {
+  return new Promise(async (resolve) => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const fire = (el, type) => {
+      if (!el || typeof el.dispatchEvent !== 'function') return;
+      const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0, width: 200, height: 24 };
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      try {
+        el.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+          button: 0
+        }));
+      } catch (_) {}
+      try { el.click(); } catch (_) {}
+    };
+
+    try {
+      const allDropdowns = Array.from(document.querySelectorAll('material-dropdown-select, .dropdown-label-container, [role="button"], [aria-label*="Show rows" i]'))
+        .filter(el => {
+          const text = ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute && el.getAttribute('aria-label') || '')).toLowerCase();
+          return text.includes('show rows') || text.includes('rows:');
+        });
+      const dropdown = allDropdowns[0] || Array.from(document.querySelectorAll('material-dropdown-select')).find(el =>
+        ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute && el.getAttribute('aria-label') || '')).toLowerCase().includes('show rows'));
+      if (dropdown) {
+        fire(dropdown, 'mousedown');
+        fire(dropdown, 'mouseup');
+        fire(dropdown, 'click');
+        await sleep(500);
+      }
+
+      const candidates = Array.from(document.querySelectorAll('material-select-item, [role="option"], li, button'))
+        .filter(el => {
+          const s = (el.innerText || el.textContent || '').trim();
+          const a = (el.getAttribute && el.getAttribute('aria-label')) || '';
+          return /^30$/i.test(s) || /30/i.test(a) || /30\s*(selected|rows)?/i.test(s + ' ' + a);
+        });
+      const target = candidates.find(el => (el.innerText || el.textContent || '').trim() === '30') || candidates[0];
+      if (target) {
+        fire(target, 'mousedown');
+        fire(target, 'mouseup');
+        fire(target, 'click');
+        await sleep(600);
+      }
+      resolve(true);
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+function clickNextActivityLogPage() {
+  const els = Array.from(document.querySelectorAll('button, [role="button"], a, [aria-label]'))
+    .filter(el => {
+      const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + (el.innerText || el.textContent || '');
+      return /next page|next|page suivante|suivant|suivante|page suivante/i.test(label) && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+    });
+  const nextBtn = els.find(el => {
+    const label = ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + (el.innerText || el.textContent || '');
+    return /next page|next|page suivante|suivant|suivante|page suivante/i.test(label);
+  });
+  if (!nextBtn) return false;
+  nextBtn.click();
+  return true;
+}
+
 // ===== INJECTED: scan the activity-log page for the "Account created" event =====
 function extractAccountCreatedFromActivityLog() {
   return new Promise(async (resolve) => {
@@ -6715,23 +6913,101 @@ function extractAccountCreatedFromActivityLog() {
       await sleep(3000);
 
       const text = document.body.innerText || '';
-      const DATE_RE = /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}/i;
-      const CREATED_RE = /account created|compte créé|compte cree|cuenta creada|konto erstellt/i;
+      const DATE_PATTERNS = [
+        /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}/i,
+        /\d{4}[/. -]\d{1,2}[/. -]\d{1,2}/,
+        /\d{1,2}\s*(?:janv|janvier|fevr|févr|fevrier|février|mars|avr|avril|mai|juin|juil|juillet|aout|août|sept|septembre|oct|octobre|nov|novembre|dec|déc|décembre)\.?\s*\d{4}/i,
+        /\d{1,2}\s*(?:يناير|فبراير|مارس|أبريل|مايو|يونيو|يوليو|أغسطس|سبتمبر|أكتوبر|نوفمبر|ديسمبر)\s*\d{4}/i,
+        /\d{1,2}[/. -]\d{1,2}[/. -]\d{2,4}/,
+        /(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\s+\d{4}/i,
+        /\d{1,2}\s+(?:janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)\s+\d{4}/i,
+        /\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}/i
+      ];
+      const CREATED_RE = /account created|compte créé|compte cree|cuenta creada|konto erstellt|تم\s*إنشاء\s*(?:الحساب|حساب|هذا\s*الحساب)|الحساب\s*تم\s*إنشاؤه/i;
+
+      const findNearestDateAroundMarker = (haystack, markerIndex) => {
+        const matches = [];
+        for (const pattern of DATE_PATTERNS) {
+          const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+          for (const match of haystack.matchAll(globalPattern)) {
+            if (match.index == null) continue;
+            matches.push({ value: normalizeDateMatch(match[0]), index: match.index });
+          }
+        }
+        if (!matches.length) return null;
+        let best = null;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (const candidate of matches) {
+          const distance = Math.abs(candidate.index - markerIndex);
+          if (distance < bestDistance || (distance === bestDistance && candidate.index > markerIndex)) {
+            bestDistance = distance;
+            best = candidate.value;
+          }
+        }
+        return best;
+      };
+
+      const normalizeDateMatch = value => {
+        if (!value) return value;
+        const numeric = value.match(/^(\d{4})[/. -](\d{1,2})[/. -](\d{1,2})$/);
+        if (numeric) return value;
+        return value;
+      };
+
+      const findDateInText = haystack => {
+        if (!haystack) return null;
+        for (const pattern of DATE_PATTERNS) {
+          const m = haystack.match(pattern);
+          if (m) return normalizeDateMatch(m[0]);
+        }
+        return null;
+      };
+
+      const findDateNearMarkerElement = (el) => {
+        if (!el) return null;
+        const text = el.innerText || el.textContent || '';
+        if (!text) return null;
+        if (typeof el.closest !== 'function') return findDateInText(text);
+        const root = el.closest('div, tr, li, p, [role="row"], [role="gridcell"], [class*="activity"], [class*="event"]') || el;
+        const family = new Set();
+        for (let node = root; node && family.size < 12; node = node.parentElement) {
+          family.add(node);
+        }
+        for (let node = root; node && family.size < 30; node = node.nextElementSibling || node.parentElement) {
+          family.add(node);
+        }
+        const texts = [];
+        for (const node of family) {
+          const value = node && (node.textContent || node.innerText || '');
+          if (value) texts.push(value);
+        }
+        const combined = texts.join(' ');
+        if (!combined) return null;
+        const idx = combined.search(CREATED_RE);
+        if (idx >= 0) return findNearestDateAroundMarker(combined, idx);
+        return findDateInText(combined);
+      };
+
+      const isDrilldownDetail = el => {
+        if (!el || typeof el.closest !== 'function') return false;
+        return !!(el.closest('changes-drilldown-view') || el.closest('.drilldown-card-container'));
+      };
 
       let found = null;
-      const rows = document.querySelectorAll('tr, [role="row"], li, [class*="activity"], [class*="event"]');
+      const rows = document.querySelectorAll('tr, [role="row"], li, [class*="activity"], [class*="event"], [role="gridcell"], p');
       for (const row of rows) {
-        const t = row.innerText || '';
+        if (isDrilldownDetail(row)) continue;
+        const t = row.innerText || row.textContent || '';
         if (CREATED_RE.test(t)) {
-          const dm = t.match(DATE_RE);
-          if (dm) { found = dm[0]; break; }
+          const dm = findDateNearMarkerElement(row) || findDateInText(t);
+          if (dm) { found = dm; break; }
         }
       }
       if (!found && CREATED_RE.test(text)) {
         const idx = text.search(CREATED_RE);
-        const around = text.slice(Math.max(0, idx - 400), idx + 400);
-        const dm = around.match(DATE_RE);
-        if (dm) found = dm[0];
+        const around = text.slice(Math.max(0, idx - 400), idx + 600);
+        const markerIndex = Math.min(400, Math.max(0, idx));
+        found = findNearestDateAroundMarker(around, markerIndex) || findDateInText(around);
       }
       const rowCount = document.querySelectorAll('tr, [role="row"], li').length;
       resolve({ createdDate: found, rowCount, hasCreatedMarker: CREATED_RE.test(text) });
@@ -6753,11 +7029,28 @@ async function findAccountCreatedDate(tab, devId) {
     await chrome.tabs.update(tab.id, { url });
     await waitForTabLoad(tab.id);
     await sleep(2500);
-    const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAccountCreatedFromActivityLog });
-    const r = res && res[0] && res[0].result;
-    if (r && r.createdDate) return r.createdDate;
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: setActivityLogPageSizeTo30 });
+    await sleep(1000);
+
+    let found = null;
+    for (let page = 0; page < 20; page++) {
+      const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAccountCreatedFromActivityLog });
+      const r = res && res[0] && res[0].result;
+      if (r && r.createdDate) {
+        found = r.createdDate;
+        break;
+      }
+      const nextResult = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: clickNextActivityLogPage });
+      const canPage = !!(nextResult && nextResult[0] && nextResult[0].result);
+      if (!canPage) break;
+      await sleep(1500);
+    }
+    if (found) return found;
+
     // Two empty windows in a row → nothing older exists, stop early
-    if (r && r.rowCount === 0 && w >= 1) {
+    const resCheck = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractAccountCreatedFromActivityLog });
+    const rCheck = resCheck && resCheck[0] && resCheck[0].result;
+    if (rCheck && rCheck.rowCount === 0 && w >= 1) {
       const prevUrl = `https://play.google.com/console/u/0/developers/${devId}/activity-log?from=${fmt(new Date(today.getTime() - (w + 2) * 90 * 86400000))}&to=${fmt(new Date(today.getTime() - (w + 1) * 90 * 86400000))}`;
       await chrome.tabs.update(tab.id, { url: prevUrl });
       await waitForTabLoad(tab.id);
@@ -6860,13 +7153,35 @@ function downloadDataUrl(filename, dataUrl) {
   a.remove();
 }
 
+function parseWhatsAppTargets(rawValue) {
+  return (rawValue || '')
+    .split(/\r?\n|,|;/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => /https?:\/\/chat\.whatsapp\.com\//i.test(line) || /\d/.test(line));
+}
+
 // Open WhatsApp (web/app) with the account description pre-filled, then auto-click Send.
 // The background worker owns the tab (opened in background, auto-clicked, closed) so the
 // Play Console tab never loses focus mid-scan.
 // Returns { opened, sent, error }.
 async function sendWhatsAppDescription(phone, text) {
-  const digits = (phone || '').replace(/[^0-9]/g, '');
-  if (!digits) return { opened: false, sent: false, error: 'no-number' };
+  const raw = (phone || '').trim();
+  if (!raw) return { opened: false, sent: false, error: 'no-number' };
+
+  const inviteMatch = raw.match(/https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/i) || raw.match(/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/i);
+  if (inviteMatch) {
+    const inviteUrl = inviteMatch[0].startsWith('http') ? inviteMatch[0] : `https://${inviteMatch[0]}`;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'wa-send', phone: inviteUrl, text });
+      return response || { opened: false, sent: false, error: 'no-response' };
+    } catch (e) {
+      return { opened: false, sent: false, error: e.message || 'message-failed' };
+    }
+  }
+
+  const digits = raw.replace(/[^0-9]/g, '');
+  if (!digits) return { opened: false, sent: false, error: 'invalid-number' };
   try {
     const response = await chrome.runtime.sendMessage({ type: 'wa-send', phone, text });
     return response || { opened: false, sent: false, error: 'no-response' };
@@ -7091,20 +7406,25 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
         downloadTextFile(descFile, description);
 
         // 6) Optional: open WhatsApp with this description pre-filled and auto-click Send
-        const waNumber = (document.getElementById('whatsAppNumber')?.value || '').trim();
+        const rawTargets = document.getElementById('whatsAppNumber')?.value || '';
+        const targets = parseWhatsAppTargets(rawTargets);
         const waSend = document.getElementById('whatsAppSend')?.checked;
-        if (waSend && waNumber) {
-          const wa = await sendWhatsAppDescription(waNumber, description);
-          if (wa.sent) log(`  📱 WhatsApp sent for ${acc.name} ✅`, 'success');
-          else if (wa.opened && wa.error === 'login-required') log(`  ⚠️ WhatsApp Web not logged in — scan the QR code once, then retry`, 'error');
-          else if (wa.opened && wa.error === 'invalid-number') log(`  ⚠️ WhatsApp: invalid number ${waNumber}`, 'error');
-          else if (wa.opened && wa.error === 'no-tab-handle') log(`  ⚠️ WhatsApp opened but auto-click unavailable — press Send manually`, 'info');
-          else if (wa.opened) log(`  ⚠️ WhatsApp auto-send timed out — tab left open, press Send`, 'info');
-          else log(`  ⚠️ WhatsApp popup blocked — allow popups for this page, then retry`, 'error');
-        } else if (waNumber && !waSend) {
+        if (waSend && targets.length) {
+          for (const target of targets) {
+            const wa = await sendWhatsAppDescription(target, description);
+            if (wa.sent) log(`  📱 WhatsApp sent to ${target} for ${acc.name} ✅`, 'success');
+            else if (wa.opened && wa.error === 'group-link-opened-copy-text') log(`  📱 WhatsApp community/group link opened and description copied for ${acc.name} (${target}) — paste and send manually in the group`, 'info');
+            else if (wa.opened && wa.error === 'group-link-opened') log(`  📱 WhatsApp community/group link opened for ${acc.name} (${target}) — paste/send manually if needed`, 'info');
+            else if (wa.opened && wa.error === 'login-required') log(`  ⚠️ WhatsApp Web not logged in — scan the QR code once, then retry`, 'error');
+            else if (wa.opened && wa.error === 'invalid-number') log(`  ⚠️ WhatsApp: invalid number/group target ${target}`, 'error');
+            else if (wa.opened && wa.error === 'no-tab-handle') log(`  ⚠️ WhatsApp opened but auto-click unavailable — press Send manually`, 'info');
+            else if (wa.opened) log(`  ⚠️ WhatsApp auto-send timed out for ${target} — tab left open, press Send`, 'info');
+            else log(`  ⚠️ WhatsApp popup blocked for ${target} — allow popups for this page, then retry`, 'error');
+          }
+        } else if (rawTargets.trim() && !waSend) {
           // checkbox off — silent
-        } else if (waSend && !waNumber) {
-          log(`  ⚠️ WhatsApp send enabled but no number set`, 'error');
+        } else if (waSend && !targets.length) {
+          log(`  ⚠️ WhatsApp send enabled but no number or group link set`, 'error');
         }
 
         const c = accountStatusCounts(report.apps);
