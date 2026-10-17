@@ -6790,119 +6790,19 @@ function downloadDataUrl(filename, dataUrl) {
   a.remove();
 }
 
-// Injected into the wa.me / web.whatsapp.com tab: wait for the chat to load,
-// then click the Send button automatically.
-function autoClickWhatsAppSend() {
-  return new Promise((resolve) => {
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    (async () => {
-      // Wait for web.whatsapp.com chat to load — try multiple send-button selectors
-      const SEND_SELECTORS = [
-        '[data-icon="send"]',
-        'button[aria-label*="Send" i]',
-        'button[aria-label*="Envoyer" i]',
-        '[aria-label*="Send" i][role="button"]',
-        '[aria-label*="Envoyer" i][role="button"]',
-        'span[data-icon="send"]',
-        'div[role="button"][aria-label*="Send" i]',
-        'div[role="button"][aria-label*="Envoyer" i]'
-      ];
-      // Also try the composer footer send icon (WhatsApp's current layout)
-      const COMPOSER_FOOTER = 'footer button, footer [role="button"], #main footer [data-icon]';
-      for (let w = 0; w < 90; w++) { // up to 45s
-        for (const sel of SEND_SELECTORS) {
-          const btn = document.querySelector(sel);
-          if (btn) {
-            const clickable = btn.closest('button, [role="button"], div') || btn;
-            clickable.click();
-            btn.click();
-            resolve({ sent: true, selector: sel, wait: w });
-            return;
-          }
-        }
-        // Fallback: last icon-button in the composer footer is usually Send
-        const footerBtns = document.querySelectorAll(COMPOSER_FOOTER);
-        if (footerBtns.length) {
-          const last = footerBtns[footerBtns.length - 1];
-          const clickable = last.closest('button, [role="button"], div') || last;
-          clickable.click();
-          last.click();
-          resolve({ sent: true, selector: 'composer-footer-fallback', wait: w });
-          return;
-        }
-        // Last resort: press Enter in the message composer (WhatsApp sends on Enter)
-        const composer = document.querySelector('[contenteditable="true"][data-tab="10"], #main [contenteditable="true"], div[contenteditable="true"][title]');
-        if (composer) {
-          composer.focus();
-          for (const type of ['keydown', 'keypress', 'keyup']) {
-            composer.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          }
-          resolve({ sent: true, selector: 'enter-key-fallback', wait: w });
-          return;
-        }
-        // If WhatsApp shows "phone number invalid" or a login QR code, bail out
-        const bodyText = (document.body.innerText || '').toLowerCase();
-        if (bodyText.includes('phone number') && (bodyText.includes('invalid') || bodyText.includes('not on whatsapp'))) {
-          resolve({ sent: false, error: 'invalid-number' });
-          return;
-        }
-        if (document.querySelector('[data-testid="qrcode"], canvas[aria-label*="QR" i], .landing-qr')) {
-          resolve({ sent: false, error: 'login-required' });
-          return;
-        }
-        await sleep(500);
-      }
-      resolve({ sent: false, error: 'timeout' });
-    })();
-  });
-}
-
 // Open WhatsApp (web/app) with the account description pre-filled, then auto-click Send.
+// The background worker owns the tab (opened in background, auto-clicked, closed) so the
+// Play Console tab never loses focus mid-scan.
 // Returns { opened, sent, error }.
 async function sendWhatsAppDescription(phone, text) {
   const digits = (phone || '').replace(/[^0-9]/g, '');
   if (!digits) return { opened: false, sent: false, error: 'no-number' };
-  // web.whatsapp.com/send works in-browser (scriptable). wa.me would open the native desktop app on Mac.
-  const url = `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(text)}`;
-
-  // Create the tab via chrome.tabs (more reliable than window.open for scripting injection)
-  let tab = null;
   try {
-    tab = await chrome.tabs.create({ url, active: true });
-  } catch (_) {
-    const win = window.open(url, '_blank');
-    if (!win) return { opened: false, sent: false, error: 'popup-blocked' };
-    return { opened: true, sent: false, error: 'no-tab-handle' }; // opened but can't auto-click
+    const response = await chrome.runtime.sendMessage({ type: 'wa-send', phone, text });
+    return response || { opened: false, sent: false, error: 'no-response' };
+  } catch (e) {
+    return { opened: false, sent: false, error: e.message || 'message-failed' };
   }
-  if (!tab || !tab.id) return { opened: true, sent: false, error: 'no-tab-handle' };
-
-  // Wait for web.whatsapp.com to load the chat, then inject the clicker
-  for (let attempt = 0; attempt < 24; attempt++) {
-    await sleep(1000);
-    try {
-      const info = await chrome.tabs.get(tab.id);
-      if (info.status !== 'complete') continue;
-      const result = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: autoClickWhatsAppSend
-      });
-      const r = result && result[0] && result[0].result;
-      if (r && r.sent) {
-        // Leave the tab open briefly so the send registers, then close it
-        await sleep(2500);
-        try { chrome.tabs.remove(tab.id); } catch (_) {}
-        return { opened: true, sent: true };
-      }
-      if (r && r.error && r.error !== 'timeout') {
-        return { opened: true, sent: false, error: r.error };
-      }
-      // timeout on this attempt — page may still be redirecting; retry
-    } catch (_) {
-      // Tab closed by user or navigated away
-      return { opened: true, sent: false, error: 'tab-closed' };
-    }
-  }
-  return { opened: true, sent: false, error: 'timeout' };
 }
 
 // Build a human-readable description of one developer account from its report
