@@ -6706,9 +6706,17 @@ function csvEscape(v) {
 }
 
 function accountStatusCounts(apps) {
-  const prod = apps.filter(a => /production|active/i.test(a.status || '')).length;
-  const draft = apps.filter(a => /draft|brouillon/i.test(a.status || '')).length;
-  return { total: apps.length, prod, draft };
+  const has = (re) => apps.filter(a => re.test(a.status || '')).length;
+  const prod = has(/production|active/i);
+  const draft = has(/draft|brouillon/i);
+  const unpublished = has(/unpublished|retirée|retire/i);
+  const removed = has(/removed|supprimée|supprime/i);
+  const suspended = has(/suspended|suspendue/i);
+  const inReview = has(/in review|en cours d'examen/i);
+  const rejected = has(/rejected|refusée|refuse/i);
+  const inactive = has(/^inactive/i);
+  const known = prod + draft + unpublished + removed + suspended + inReview + rejected + inactive;
+  return { total: apps.length, prod, draft, unpublished, removed, suspended, inReview, rejected, inactive, other: apps.length - known };
 }
 
 function buildAccountCsv(accountName, report) {
@@ -6719,6 +6727,13 @@ function buildAccountCsv(accountName, report) {
     ['Total Apps', c.total],
     ['Production Apps', c.prod],
     ['Draft Apps', c.draft],
+    ['Unpublished Apps', c.unpublished],
+    ['Removed Apps', c.removed],
+    ['Suspended Apps', c.suspended],
+    ['In Review Apps', c.inReview],
+    ['Rejected Apps', c.rejected],
+    ['Inactive Apps', c.inactive],
+    ['Other Status Apps', c.other],
     [],
     ['App', 'Package Name', 'Installed Audience', 'App Status', 'Update Status', 'Last Updated'],
     ...report.apps.map(a => [a.name, a.pkg, a.installed, a.status, a.updateStatus, a.updated])
@@ -6728,8 +6743,8 @@ function buildAccountCsv(accountName, report) {
 
 function buildAccountsSummaryCsv(entries) {
   const rows = [
-    ['Account Name', 'Account ID', 'Total Apps', 'Production Apps', 'Draft Apps', 'Report File'],
-    ...entries.map(e => [e.name, e.accountId, e.total, e.prod, e.draft, e.fileName])
+    ['Account Name', 'Account ID', 'Total Apps', 'Production Apps', 'Draft Apps', 'Unpublished Apps', 'Removed Apps', 'Suspended Apps', 'Other Status Apps', 'Report File'],
+    ...entries.map(e => [e.name, e.accountId, e.total, e.prod, e.draft, e.unpublished || 0, e.removed || 0, e.suspended || 0, e.other || 0, e.fileName])
   ];
   return rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
 }
@@ -6780,7 +6795,13 @@ function buildAccountDescription(accountName, report, screenshotFile) {
     `Total apps: ${c.total}`,
     `Production apps: ${c.prod}`,
     `Draft apps: ${c.draft}`,
-    `Other status: ${c.total - c.prod - c.draft}`,
+    `Unpublished apps: ${c.unpublished}`,
+    `Removed apps: ${c.removed}`,
+    `Suspended apps: ${c.suspended}`,
+    `In review apps: ${c.inReview}`,
+    `Rejected apps: ${c.rejected}`,
+    `Inactive apps: ${c.inactive}`,
+    `Other status: ${c.other}`,
     '',
     'Apps:',
     ...(report.apps.length
@@ -6962,7 +6983,7 @@ document.getElementById('fetchAllConsoleBtn').addEventListener('click', async ()
         downloadTextFile(descFile, description);
 
         const c = accountStatusCounts(report.apps);
-        entries.push({ name: acc.name, accountId: report.accountId, total: c.total, prod: c.prod, draft: c.draft, fileName, screenshotFile: savedShot, descFile, description });
+        entries.push({ name: acc.name, accountId: report.accountId, total: c.total, prod: c.prod, draft: c.draft, unpublished: c.unpublished, removed: c.removed, suspended: c.suspended, other: c.other, fileName, screenshotFile: savedShot, descFile, description });
         renderConsoleReportResults(entries);
         log(`  ✅ ${acc.name}: ${c.total} apps (${c.prod} production, ${c.draft} draft) → ${fileName}${savedShot ? ` + ${savedShot}` : ''} + ${descFile}`, 'success');
         await sleep(1200);
