@@ -105,13 +105,14 @@
     <textarea id="consoleAccountFilter" style="height:52px" placeholder="ELYAMANI-DEV-GPC&#10;EOOrga"></textarea>
     <small>Leave empty to process every account. Matching is case-insensitive and partial (e.g. "elyamani" matches "ELYAMANI-DEV-GPC").</small>
     <div class="row" style="align-items:center;margin-top:6px">
-      <div>
-        <label>WhatsApp number (optional)</label>
-        <input type="text" id="whatsAppNumber" value="+212675328661" placeholder="+2126...">
+      <div style="flex:1">
+        <label>WhatsApp numbers / group links (optional, one per line)</label>
+        <textarea id="whatsAppNumber" rows="4" placeholder="+212600000001&#10;+212600000002&#10;https://chat.whatsapp.com/ABC123">+212675328661</textarea>
+        <small style="display:block;margin-top:4px;color:#7a869a">Use one phone number or one WhatsApp community/group invite link per line. Numbers auto-send; group links open and copy the text for manual send.</small>
       </div>
       <div style="display:flex;align-items:flex-end;gap:6px;padding-bottom:8px">
         <input type="checkbox" id="whatsAppSend" checked>
-        <label for="whatsAppSend" style="display:inline;color:#2ed573;font-size:11px;cursor:pointer;margin:0">📱 Send each description to WhatsApp (opens wa.me per account)</label>
+        <label for="whatsAppSend" style="display:inline;color:#2ed573;font-size:11px;cursor:pointer;margin:0">📱 Send each description to WhatsApp</label>
       </div>
     </div>
     <button id="fetchAllConsoleBtn" type="button">📊 Fetch all console</button>
@@ -122,6 +123,24 @@
     <label>Apps: name|package (one per line)</label>
     <textarea id="appNames" style="height:100px" placeholder="My App 1|com.example.app1&#10;My App 2|com.example.app2&#10;My App 3">Watch Movies</textarea>
     <small>Package name is optional. If omitted, a random unique package name is generated.</small>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Number of apps to publish</label>
+      <input type="number" id="appPublishCount" value="1" min="1" max="100">
+    </div>
+    <div>
+      <label>Random repo pool (one per line)</label>
+      <textarea id="repoPool" rows="3" placeholder="owner/repo-a&#10;owner/repo-b">GPC-Shared/68d9d0fa1299230338c8563a</textarea>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:12px;margin:8px 0 12px">
+    <label style="display:flex;align-items:center;gap:4px;font-size:11px;margin:0">
+      <input type="checkbox" id="randomizeRepoPerApp" checked>
+      Random repo per app
+    </label>
   </div>
 
   <div class="row">
@@ -451,7 +470,7 @@
 
     <div class="section">
       <label style="display:flex;align-items:center;gap:6px">
-        <input type="checkbox" id="publishFlutterPlay">
+        <input type="checkbox" id="publishFlutterPlay" checked>
         Upload listing and AAB to Google Play as a draft
       </label>
       <small>Requires the PLAY_STORE_JSON_KEY Actions secret and an app already created in Play Console.</small>
