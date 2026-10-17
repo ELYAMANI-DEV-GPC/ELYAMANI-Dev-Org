@@ -3805,9 +3805,17 @@ async function loadBranchSelector(token, repoFullName) {
 
 // Persist GitHub settings
 document.addEventListener('DOMContentLoaded', () => {
-  const fields = ['ghToken', 'ghRepo', 'ghBranch', 'ghBaseBranch', 'geminiApiKey', 'whatsAppNumber'];
+  const fields = ['ghToken', 'ghRepo', 'ghBranch', 'ghBaseBranch', 'geminiApiKey', 'whatsAppNumber', 'repoPool', 'randomizeRepoPerApp'];
   chrome.storage.local.get(fields, (d) => {
-    fields.forEach(f => { if (d[f]) document.getElementById(f).value = d[f]; });
+    fields.forEach(f => {
+      const el = document.getElementById(f);
+      if (!el) return;
+      if (el.type === 'checkbox') {
+        if (d[f] !== undefined) el.checked = !!d[f];
+      } else if (d[f] !== undefined && d[f] !== null) {
+        el.value = d[f];
+      }
+    });
     // Auto-load repos if token is saved
     if (d.ghToken) {
       loadRepoSelector(d.ghToken);
@@ -3827,6 +3835,20 @@ document.addEventListener('DOMContentLoaded', () => {
   if (waEl) {
     waEl.addEventListener('input', () => {
       chrome.storage.local.set({ whatsAppNumber: waEl.value.trim() });
+    });
+  }
+
+  // Repo pool and randomization persistence from settings
+  const repoPoolEl = document.getElementById('repoPool');
+  if (repoPoolEl) {
+    repoPoolEl.addEventListener('input', () => {
+      chrome.storage.local.set({ repoPool: repoPoolEl.value.trim() });
+    });
+  }
+  const randomizeRepoEl = document.getElementById('randomizeRepoPerApp');
+  if (randomizeRepoEl) {
+    randomizeRepoEl.addEventListener('change', () => {
+      chrome.storage.local.set({ randomizeRepoPerApp: randomizeRepoEl.checked });
     });
   }
 
