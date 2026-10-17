@@ -129,6 +129,19 @@ function chooseRandomRepoFromPool() {
   return selectedRepo;
 }
 
+function ensureRepoOption(select, repo) {
+  if (!select || !repo) return false;
+  let option = select.querySelector(`option[value="${repo}"]`);
+  if (!option) {
+    option = document.createElement('option');
+    option.value = repo;
+    option.textContent = repo;
+    select.appendChild(option);
+  }
+  select.value = repo;
+  return true;
+}
+
 function applyGitHubRepoSelection(repo) {
   if (!repo) return;
   const repoSelect = document.getElementById('ghRepo');
@@ -3773,8 +3786,8 @@ async function loadRepoSelector(token) {
     const repoPool = parseRepoPool(document.getElementById('repoPool')?.value || '', savedRepo || '');
     if (randomizeRepo && repoPool.length > 0) {
       const selectedRepo = repoPool[Math.floor(Math.random() * repoPool.length)];
-      if (selectedRepo && select.querySelector(`option[value="${selectedRepo}"]`)) {
-        select.value = selectedRepo;
+      if (selectedRepo) {
+        ensureRepoOption(select, selectedRepo);
         chrome.storage.local.set({ ghRepo: selectedRepo });
         loadBranchSelector(token, selectedRepo);
       }
