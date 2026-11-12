@@ -61,6 +61,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.9
           cache: true
 
       - name: Set up Android SDK
@@ -102,18 +103,5 @@ jobs:
       - name: Resolve Flutter dependencies
         run: flutter pub get
 
-      - name: Upgrade Gradle wrapper to Flutter-supported version
-        run: |
-          set -euo pipefail
-          WRAPPER=android/gradle/wrapper/gradle-wrapper.properties
-          REQUIRED_GRADLE=9.3.1
-          if [ -f "$WRAPPER" ]; then
-            sed -i -E "s#distributionUrl=.*#distributionUrl=https\\\\://services.gradle.org/distributions/gradle-${REQUIRED_GRADLE}-all.zip#" "$WRAPPER"
-            echo "Updated $WRAPPER to Gradle ${REQUIRED_GRADLE}:"
-            cat "$WRAPPER"
-          else
-            echo "Gradle wrapper not found at $WRAPPER; skipping upgrade."
-          fi
-
       - name: Build signed Android App Bundle
-        run: flutter build appbundle --release --android-skip-build-dependency-validation
+        run: flutter build appbundle --release
