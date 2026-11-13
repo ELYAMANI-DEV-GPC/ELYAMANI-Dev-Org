@@ -5197,7 +5197,7 @@ async function ensureFlutterBuildWorkflow(token, repo, publishToPlay = false, ta
     '      publish_to_play:',
     "        description: 'Upload listing and AAB to Google Play as a draft'",
     '        required: false',
-    '        default: false',
+    '        default: true',
     '        type: boolean',
     '      upload_listing:',
     "        description: 'Update listing text and images together with the AAB'",
