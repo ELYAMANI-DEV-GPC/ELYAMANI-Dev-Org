@@ -3775,6 +3775,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Repo change: load branches
   const repoEl = document.getElementById('ghRepo');
   const manualEl = document.getElementById('ghRepoManual');
+  const repoSearchEl = document.getElementById('ghRepoSearch');
   if (repoEl) {
     const updateRepoCustomState = () => {
       if (!manualEl) return;
@@ -3796,6 +3797,24 @@ document.addEventListener('DOMContentLoaded', () => {
       if (val && token) loadBranchSelector(token, val);
     });
     updateRepoCustomState();
+  }
+
+  if (repoSearchEl && repoEl) {
+    repoSearchEl.addEventListener('input', () => {
+      const filter = repoSearchEl.value.trim().toLowerCase();
+      const options = [...repoEl.options];
+      options.forEach(opt => {
+        const text = (opt.textContent || opt.value || '').toLowerCase();
+        const matches = !filter || text.includes(filter) || opt.value.toLowerCase().includes(filter);
+        opt.hidden = !matches && opt.value !== '__custom__';
+      });
+      if (!filter) {
+        repoEl.value = repoEl.dataset.selected || repoEl.value || '__custom__';
+      }
+    });
+    repoSearchEl.addEventListener('focus', () => {
+      repoEl.dataset.selected = repoEl.value;
+    });
   }
 
   // Manual repo input: override select
