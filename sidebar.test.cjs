@@ -583,7 +583,8 @@ test('branch rebuild request preserves workflow and branch for failed version bu
     ['ghTrack', 'beta'],
     ['ghBaseBranch', 'main'],
     ['shortDesc', 'A great app'],
-    ['fullDesc', 'Download now!']
+    ['fullDesc', 'Download now!'],
+    ['rebuildBranchSelect', 'feature/fix-version-code']
   ]);
   const context = vm.createContext({
     document: {
@@ -601,9 +602,35 @@ test('branch rebuild request preserves workflow and branch for failed version bu
   vm.runInContext(source.slice(source.indexOf('function getBranchRebuildRequest('), source.indexOf("document.getElementById('inspectProjectBtn').addEventListener")), context);
   const request = context.getBranchRebuildRequest();
   assert.equal(request.repo, 'owner/repo');
-  assert.equal(request.branch, 'com.example.app');
+  assert.equal(request.branch, 'feature/fix-version-code');
   assert.equal(request.workflow, 'flutter-build.yml');
   assert.equal(request.inputs.publish_to_play, 'true');
   assert.equal(request.inputs.track, 'beta');
   assert.equal(request.inputs.request_id.startsWith('rebuild-'), true);
+});
+
+test('branch rebuild ignores package-name fallback and requires an explicit selected branch', () => {
+  const values = new Map([
+    ['ghToken', 'token'],
+    ['ghRepo', 'owner/repo'],
+    ['ghWorkflow', 'flutter-build.yml'],
+    ['ghBranch', 'com.example.app'],
+    ['ghTrack', 'beta'],
+    ['shortDesc', 'A great app'],
+    ['fullDesc', 'Download now!']
+  ]);
+  const context = vm.createContext({
+    document: {
+      getElementById: id => ({
+        value: values.get(id) || '',
+        checked: id === 'publishFlutterPlay' ? true : undefined,
+        addEventListener: () => {},
+        hidden: false
+      })
+    },
+    getAppEntries: () => [{ pkg: 'com.example.app', name: 'Example App' }],
+    crypto: { randomUUID: () => 'retry-123' }
+  });
+  vm.runInContext(source.slice(source.indexOf('function getBranchRebuildRequest('), source.indexOf("document.getElementById('inspectProjectBtn').addEventListener")), context);
+  assert.equal(context.getBranchRebuildRequest(), null);
 });

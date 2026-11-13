@@ -5986,7 +5986,8 @@ function getBranchRebuildRequest() {
   const repo = (document.getElementById('ghRepo')?.value || '').trim() || (document.getElementById('ghRepoManual')?.value || '').trim();
   const workflow = document.getElementById('ghWorkflow').value;
   const rebuildSelect = document.getElementById('rebuildBranchSelect');
-  const branch = (rebuildSelect?.value || document.getElementById('ghBranch').value || '').trim() || getAppEntries(true)[0]?.pkg || '';
+  const selectedBranch = (rebuildSelect?.value || '').trim();
+  const branch = selectedBranch || '';
   if (!token || !repo || !branch || workflow === 'setup-variant.yml') return null;
 
   const publishToPlay = document.getElementById('publishFlutterPlay')?.checked ? 'true' : 'false';
