@@ -3880,6 +3880,32 @@ function buildLog(msg, cls = '') {
   _saveState();
 }
 
+function formatGitHubFailureReason(reason, contextLabel = '') {
+  const literal = typeof reason === 'string' ? reason : reason?.message || String(reason || 'Unknown GitHub error');
+  const details = [];
+  if (reason && typeof reason === 'object') {
+    if (Array.isArray(reason.errors)) {
+      for (const error of reason.errors) {
+        const text = [error.resource, error.field, error.code, error.message || error.description].filter(Boolean).join(' • ');
+        if (text) details.push(text);
+      }
+    }
+    if (reason.documentation_url) details.push(`Documentation: ${reason.documentation_url}`);
+    if (reason.status) details.push(`GitHub status: ${reason.status}`);
+  }
+  const combined = details.length ? ` (${details.join(' | ')})` : '';
+  return `${literal}${contextLabel ? ` ${contextLabel}` : ''}${combined}`;
+}
+
+function notifyBuildFailure(label, reason, contextLabel = '') {
+  const message = formatGitHubFailureReason(reason, contextLabel);
+  buildLog(`[${label}] ${message}`, 'log-error');
+  if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+    window.alert(`[${label}] ${message}`);
+  }
+  return message;
+}
+
 // ---- AI Description Generator (Gemini) ----
 async function generateDescriptions(appName, packageName, screenshots, language) {
   const apiKey = document.getElementById('geminiApiKey').value.trim();
@@ -4680,9 +4706,14 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
   );
 
   if (triggerRes.status !== 204) {
-    const err = await triggerRes.json().catch(() => ({}));
-    await recordBuildHistory({ ...history, status: 'failed', error: err.message || String(triggerRes.status) });
-    logFn(`[${label}] Trigger failed: ${err.message || triggerRes.status}`, 'log-error');
+    const responseText = await triggerRes.text().catch(() => '');
+    let payload = {};
+    if (responseText) {
+      try { payload = JSON.parse(responseText); } catch (error) { payload = { message: responseText.slice(0, 200) }; }
+    }
+    const reason = formatGitHubFailureReason(payload, `for ${repo} / ${wfFile} on ${ref}`);
+    await recordBuildHistory({ ...history, status: 'failed', error: reason });
+    notifyBuildFailure(label, payload, `for ${repo} / ${wfFile} on ${ref}`);
     return false;
   }
   logFn(`[${label}] Triggered!`, 'log-success');
@@ -4710,7 +4741,8 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
 
   if (!runId) {
     await recordBuildHistory({ key: historyKey, status: 'unknown' });
-    logFn(`[${label}] Could not find running workflow.`, 'log-error');
+    const reason = `Could not find a workflow run after dispatch for ${repo} / ${wfFile} on ${ref}. The workflow may have been rejected, disabled, or not yet started.`;
+    notifyBuildFailure(label, reason, '');
     return false;
   }
   logFn(`[${label}] Run #${runId} started`, 'log-success');
@@ -4730,7 +4762,8 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
         logFn(`[${label}] Completed successfully!`, 'log-success');
         return true;
       } else {
-        logFn(`[${label}] Failed: ${run.conclusion}`, 'log-error');
+        const runReason = run.html_url ? `${run.conclusion} — ${run.html_url}` : run.conclusion;
+        notifyBuildFailure(label, runReason, `for ${repo} / ${wfFile} on ${ref}`);
         return false;
       }
     }
@@ -6044,7 +6077,8 @@ if (rebuildBranchBtn) {
       buildLog(ok ? `Branch rebuild succeeded for ${request.branch}.` : `Branch rebuild failed for ${request.branch}.`, ok ? 'log-success' : 'log-error');
       if (!ok) rebuildBranchBtn.disabled = false;
     } catch (error) {
-      buildLog(`Branch rebuild failed for ${request.branch}: ${error.message}`, 'log-error');
+      const reason = error && error.message ? error.message : String(error);
+      notifyBuildFailure(`Branch rebuild ${request.branch}`, reason, `for ${request.repo} / ${request.workflow}`);
       rebuildBranchBtn.disabled = false;
     }
   });

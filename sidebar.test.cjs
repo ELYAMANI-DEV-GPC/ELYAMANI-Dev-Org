@@ -395,6 +395,19 @@ test('track only the requested update run, including a run that already complete
   assert.ok(history.every(entry => entry.key === 'update-request'));
 });
 
+test('format GitHub rebuild failures with the actual API reason and docs link', () => {
+  const context = vm.createContext({});
+  vm.runInContext(source.slice(source.indexOf('function buildLog('), source.indexOf('const projectScreenshotCache')), context);
+  const detail = context.formatGitHubFailureReason({
+    message: 'Validation Failed',
+    errors: [{ resource: 'Workflow', field: 'ref', code: 'invalid' }],
+    documentation_url: 'https://docs.github.com/rest/actions/workflows'
+  });
+  assert.match(detail, /Validation Failed/);
+  assert.match(detail, /Workflow/);
+  assert.match(detail, /documentation/i);
+});
+
 function discoveryContext(emptyRepositoryError) {
   const requests = [];
   const inspected = [];
