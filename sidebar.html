@@ -459,7 +459,15 @@
 
     <button id="inspectProjectBtn" type="button" style="background:#263238;color:white;margin-bottom:6px">🔎 Analyze selected project</button>
     <pre id="projectInspection" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#111;padding:8px;border-radius:4px;font-size:11px;color:#ddd"></pre>
-    <button id="buildBtn" style="background:#7C4DFF;color:white">🚀 Setup + Build + Publish</button>
+    <div class="section" style="margin-top:8px; margin-bottom:8px">
+      <label>Branch to rebuild</label>
+      <input type="text" id="rebuildBranchInput" placeholder="com.example.app" value="">
+      <small>Type the branch name to retry; the workflow will run on this branch and reserve the next versionCode.</small>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button id="buildBtn" style="background:#7C4DFF;color:white">🚀 Setup + Build + Publish</button>
+      <button id="rebuildBranchBtn" type="button" style="background:#ff9800;color:#1a1a2e;padding:8px 12px">🔁 Rebuild branch (+ versionCode)</button>
+    </div>
     <div id="buildStatus" style="margin-top:8px;font-size:12px;color:#aaa"></div>
 
     <div id="existingUpdatesSection">

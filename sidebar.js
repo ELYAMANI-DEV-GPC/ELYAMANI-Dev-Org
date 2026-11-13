@@ -4672,7 +4672,8 @@ async function triggerAndWait(token, repo, wfFile, ref, inputs, label, logFn) {
 
 function parseAndroidLauncherManifest(content) {
   const document = new DOMParser().parseFromString(content, 'application/xml');
-  if (document.getElementsByTagName('parsererror').length || document.documentElement.tagName !== 'manifest') throw new Error('Invalid Android manifest XML.');
+  const root = document && document.documentElement;
+  if (!root || document.getElementsByTagName('parsererror').length || root.tagName !== 'manifest') throw new Error('Invalid Android manifest XML.');
   const androidNamespace = 'http://schemas.android.com/apk/res/android';
   const activities = [...document.getElementsByTagName('activity')];
   const hasLauncherIntent = component => [...component.getElementsByTagName('intent-filter')].some(filter =>
@@ -4684,12 +4685,13 @@ function parseAndroidLauncherManifest(content) {
   if (launchers.length !== 1) throw new Error('Expected exactly one Android launcher activity.');
   const name = launchers[0].getAttributeNodeNS(androidNamespace, 'name');
   if (!name) throw new Error('The launcher activity has no android:name.');
-  return { content, activityName: name.value, attributeName: name.name, manifestPackage: document.documentElement.getAttribute('package') };
+  return { content, activityName: name.value, attributeName: name.name, manifestPackage: root.getAttribute('package') };
 }
 
 function validateAndroidLauncherOverlay(content, path) {
   const document = new DOMParser().parseFromString(content, 'application/xml');
-  if (document.getElementsByTagName('parsererror').length || document.documentElement.tagName !== 'manifest') throw new Error(`Invalid Android manifest XML in ${path}.`);
+  const root = document && document.documentElement;
+  if (!root || document.getElementsByTagName('parsererror').length || root.tagName !== 'manifest') throw new Error(`Invalid Android manifest XML in ${path}.`);
   const androidNamespace = 'http://schemas.android.com/apk/res/android';
   const components = [...document.getElementsByTagName('activity'), ...document.getElementsByTagName('activity-alias')];
   const overridesLauncher = components.some(component => [...component.getElementsByTagName('intent-filter')].some(filter =>
@@ -5514,8 +5516,9 @@ function generateFlutterAppIcon(appName, primaryColor, accentColor) {
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Could not create an app icon canvas.');
 
-  const primary = primaryColor.match(/^#?[0-9a-fA-F]{6}$/) ? `#${primaryColor.replace(/^#/, '')}` : '#00695C';
-  const accent = accentColor.match(/^#?[0-9a-fA-F]{6}$/) ? `#${accentColor.replace(/^#/, '')}` : '#FF8F00';
+  const normalizeHex = value => (value || '').trim();
+  const primary = normalizeHex(primaryColor).match(/^#?[0-9a-fA-F]{6}$/) ? `#${normalizeHex(primaryColor).replace(/^#/, '')}` : '#00695C';
+  const accent = normalizeHex(accentColor).match(/^#?[0-9a-fA-F]{6}$/) ? `#${normalizeHex(accentColor).replace(/^#/, '')}` : '#FF8F00';
   context.fillStyle = primary;
   context.fillRect(0, 0, 512, 512);
   context.fillStyle = accent;
@@ -5874,30 +5877,107 @@ document.addEventListener('DOMContentLoaded', initializeWorkspaceNavigation);
 document.addEventListener('DOMContentLoaded', initializeExistingAppUpdates);
 document.addEventListener('DOMContentLoaded', initializeBuildHistory);
 
-document.getElementById('inspectProjectBtn').addEventListener('click', async () => {
+function getBranchRebuildRequest() {
   const token = document.getElementById('ghToken').value.trim();
-  const repo = document.getElementById('ghRepo').value.trim();
-  const ref = document.getElementById('ghBaseBranch').value.trim() || 'main';
-  const button = document.getElementById('inspectProjectBtn');
-  if (!token || !repo) {
-    buildLog('Enter GitHub token and repository before inspection.', 'log-error');
-    return;
+  const repo = (document.getElementById('ghRepo')?.value || '').trim() || (document.getElementById('ghRepoManual')?.value || '').trim();
+  const workflow = document.getElementById('ghWorkflow').value;
+  const branchInput = document.getElementById('rebuildBranchInput');
+  const branch = (branchInput?.value || document.getElementById('ghBranch').value || '').trim() || getAppEntries(true)[0]?.pkg || '';
+  if (!token || !repo || !branch || workflow === 'setup-variant.yml') return null;
+
+  const publishToPlay = document.getElementById('publishFlutterPlay')?.checked ? 'true' : 'false';
+  const track = document.getElementById('ghTrack')?.value || 'beta';
+  if (workflow === 'flutter-build.yml') {
+    return {
+      token,
+      repo,
+      workflow,
+      branch,
+      label: `Flutter AAB ${branch}`,
+      inputs: {
+        publish_to_play: publishToPlay,
+        upload_listing: 'false',
+        track,
+        request_id: `rebuild-${crypto.randomUUID()}`
+      }
+    };
   }
-  button.disabled = true;
-  try {
-    const inspection = await showProjectInspection(token, repo, ref);
-    if (inspection.projectType === 'flutter') {
-      document.getElementById('ghWorkflow').value = 'flutter-build.yml';
-      buildLog('Flutter project detected. Switched workflow to Build Flutter Android AAB.', 'log-info');
+  if (workflow === 'publish-app.yml') {
+    return {
+      token,
+      repo,
+      workflow,
+      branch,
+      label: `Publish ${branch}`,
+      inputs: {
+        branch,
+        title: (document.getElementById('shortDesc')?.value || '').trim().substring(0, 30) || 'App',
+        short_description: (document.getElementById('shortDesc')?.value || '').trim().substring(0, 80) || 'A great app',
+        full_description: (document.getElementById('fullDesc')?.value || '').trim().substring(0, 4000) || 'Download now!',
+        track
+      }
+    };
+  }
+  if (workflow === 'build.yml') {
+    return {
+      token,
+      repo,
+      workflow,
+      branch,
+      label: `Build ${branch}`,
+      inputs: undefined
+    };
+  }
+  return null;
+}
+
+const inspectProjectBtn = document.getElementById('inspectProjectBtn');
+if (inspectProjectBtn) {
+  inspectProjectBtn.addEventListener('click', async () => {
+    const token = document.getElementById('ghToken').value.trim();
+    const repo = (document.getElementById('ghRepo')?.value || '').trim() || (document.getElementById('ghRepoManual')?.value || '').trim();
+    const ref = document.getElementById('ghBaseBranch')?.value.trim() || 'main';
+    const button = document.getElementById('inspectProjectBtn');
+    if (!token || !repo) {
+      buildLog('Enter GitHub token and repository before inspection.', 'log-error');
+      return;
     }
-    buildLog(`Project inspection complete: ${inspection.projectType} (${ref}).`, 'log-success');
-  } catch (error) {
-    document.getElementById('projectInspection').textContent = error.message;
-    buildLog(`Project inspection failed: ${error.message}`, 'log-error');
-  } finally {
-    button.disabled = false;
-  }
-});
+    button.disabled = true;
+    try {
+      const inspection = await showProjectInspection(token, repo, ref);
+      if (inspection.projectType === 'flutter') {
+        document.getElementById('ghWorkflow').value = 'flutter-build.yml';
+        buildLog('Flutter project detected. Switched workflow to Build Flutter Android AAB.', 'log-info');
+      }
+      buildLog(`Project inspection complete: ${inspection.projectType} (${ref}).`, 'log-success');
+    } catch (error) {
+      document.getElementById('projectInspection').textContent = error.message;
+      buildLog(`Project inspection failed: ${error.message}`, 'log-error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+const rebuildBranchBtn = document.getElementById('rebuildBranchBtn');
+if (rebuildBranchBtn) {
+  rebuildBranchBtn.addEventListener('click', async () => {
+    const request = getBranchRebuildRequest();
+    if (!request) {
+      buildLog('Choose a branch and a build workflow before retrying a rebuild.', 'log-error');
+      return;
+    }
+    rebuildBranchBtn.disabled = true;
+    try {
+      const ok = await triggerAndWait(request.token, request.repo, request.workflow, request.branch, request.inputs, request.label, buildLog);
+      buildLog(ok ? `Branch rebuild succeeded for ${request.branch}.` : `Branch rebuild failed for ${request.branch}.`, ok ? 'log-success' : 'log-error');
+      if (!ok) rebuildBranchBtn.disabled = false;
+    } catch (error) {
+      buildLog(`Branch rebuild failed for ${request.branch}: ${error.message}`, 'log-error');
+      rebuildBranchBtn.disabled = false;
+    }
+  });
+}
 
 document.getElementById('buildBtn').addEventListener('click', async () => {
   const token = document.getElementById('ghToken').value.trim();
@@ -5913,7 +5993,9 @@ document.getElementById('buildBtn').addEventListener('click', async () => {
   }
 
   const buildBtn = document.getElementById('buildBtn');
+  const rebuildBranchBtn = document.getElementById('rebuildBranchBtn');
   buildBtn.disabled = true;
+  if (rebuildBranchBtn) rebuildBranchBtn.hidden = true;
   document.getElementById('buildStatus').innerHTML = '';
 
   try {
@@ -5985,6 +6067,7 @@ document.getElementById('buildBtn').addEventListener('click', async () => {
       const setupOk = await triggerAndWait(token, repo, 'setup-variant.yml', defaultBranch, setupInputs, 'Setup Variant');
       if (!setupOk) {
         buildLog('Setup failed. Fix errors and retry.', 'log-error');
+        if (rebuildBranchBtn) rebuildBranchBtn.hidden = false;
         buildBtn.disabled = false;
         buildBtn.textContent = '🚀 Setup + Build + Publish';
         return;
@@ -6084,9 +6167,11 @@ document.getElementById('buildBtn').addEventListener('click', async () => {
       if (ok) {
         buildBtn.style.background = '#2ed573';
         buildBtn.textContent = '✅ Published!';
+        if (rebuildBranchBtn) rebuildBranchBtn.hidden = true;
       } else {
         buildBtn.style.background = '#ff4757';
         buildBtn.textContent = '❌ Failed';
+        if (rebuildBranchBtn) rebuildBranchBtn.hidden = false;
       }
 
     } else if (workflow === 'flutter-build.yml') {
@@ -6113,9 +6198,11 @@ document.getElementById('buildBtn').addEventListener('click', async () => {
       if (ok) {
         buildBtn.style.background = '#2ed573';
         buildBtn.textContent = '✅ Flutter AAB Ready';
+        if (rebuildBranchBtn) rebuildBranchBtn.hidden = true;
       } else {
         buildBtn.style.background = '#ff4757';
         buildBtn.textContent = '❌ Flutter Build Failed';
+        if (rebuildBranchBtn) rebuildBranchBtn.hidden = false;
       }
 
     } else {
@@ -6124,9 +6211,11 @@ document.getElementById('buildBtn').addEventListener('click', async () => {
       if (ok) {
         buildBtn.style.background = '#2ed573';
         buildBtn.textContent = '✅ Build Passed!';
+        if (rebuildBranchBtn) rebuildBranchBtn.hidden = true;
       } else {
         buildBtn.style.background = '#ff4757';
         buildBtn.textContent = '❌ Build Failed';
+        if (rebuildBranchBtn) rebuildBranchBtn.hidden = false;
       }
     }
 
