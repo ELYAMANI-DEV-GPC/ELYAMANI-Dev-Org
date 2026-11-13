@@ -461,8 +461,10 @@
     <pre id="projectInspection" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#111;padding:8px;border-radius:4px;font-size:11px;color:#ddd"></pre>
     <div class="section" style="margin-top:8px; margin-bottom:8px">
       <label>Branch to rebuild</label>
-      <input type="text" id="rebuildBranchInput" placeholder="com.example.app" value="">
-      <small>Type the branch name to retry; the workflow will run on this branch and reserve the next versionCode.</small>
+      <select id="rebuildBranchSelect" style="width:100%;padding:6px;border-radius:4px;border:1px solid #ccc">
+        <option value="">-- Select branch --</option>
+      </select>
+      <small>Choose an existing branch to retry; the workflow will run there and reserve the next versionCode.</small>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button id="buildBtn" style="background:#7C4DFF;color:white">🚀 Setup + Build + Publish</button>

@@ -3664,14 +3664,19 @@ async function loadRepoSelector(token) {
 
 // Populate branch dropdown
 async function loadBranchSelector(token, repoFullName) {
-  const select = document.getElementById('ghBaseBranch');
-  const savedBranch = select.value;
-  select.innerHTML = '<option value="">⏳ Loading branches...</option>';
-  select.disabled = true;
+  const baseSelect = document.getElementById('ghBaseBranch');
+  const rebuildSelect = document.getElementById('rebuildBranchSelect');
+  const savedBranch = baseSelect ? baseSelect.value : '';
+  if (baseSelect) {
+    baseSelect.innerHTML = '<option value="">⏳ Loading branches...</option>';
+    baseSelect.disabled = true;
+  }
+  if (rebuildSelect) {
+    rebuildSelect.innerHTML = '<option value="">⏳ Loading branches...</option>';
+    rebuildSelect.disabled = true;
+  }
   try {
     const branches = await fetchGitHubBranches(token, repoFullName);
-    select.innerHTML = '';
-    // Put default branch first (main/master)
     const defaults = ['main', 'master'];
     const sorted = [...branches].sort((a, b) => {
       const ai = defaults.indexOf(a), bi = defaults.indexOf(b);
@@ -3679,26 +3684,42 @@ async function loadBranchSelector(token, repoFullName) {
       if (bi >= 0 && ai < 0) return 1;
       return a.localeCompare(b);
     });
-    sorted.forEach(name => {
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = name + (defaults.includes(name) ? ' ⭐' : '');
-      select.appendChild(opt);
-    });
-    // Restore saved value or pick default
-    if (savedBranch && select.querySelector(`option[value="${savedBranch}"]`)) {
-      select.value = savedBranch;
-    } else if (select.querySelector('option[value="main"]')) {
-      select.value = 'main';
-    } else if (select.querySelector('option[value="master"]')) {
-      select.value = 'master';
+
+    const populateSelect = (select, preferredValue) => {
+      if (!select) return;
+      select.innerHTML = '<option value="">-- Select branch --</option>';
+      sorted.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name + (defaults.includes(name) ? ' ⭐' : '');
+        select.appendChild(opt);
+      });
+      const chosen = preferredValue && select.querySelector(`option[value="${preferredValue}"]`) ? preferredValue : (select.querySelector('option[value="main"]') ? 'main' : (select.querySelector('option[value="master"]') ? 'master' : ''));
+      if (chosen) select.value = chosen;
+      else select.value = '';
+    };
+
+    if (baseSelect) {
+      populateSelect(baseSelect, savedBranch);
+      const baseValue = baseSelect.value || (baseSelect.querySelector('option[value="main"]') ? 'main' : (baseSelect.querySelector('option[value="master"]') ? 'master' : ''));
+      if (baseValue) {
+        baseSelect.value = baseValue;
+      }
+      chrome.storage.local.set({ ghBaseBranch: baseSelect.value });
+      if (baseSelect.value) loadListingDefaultsForBranch(token, repoFullName, baseSelect.value);
     }
-    chrome.storage.local.set({ ghBaseBranch: select.value });
-    if (select.value) loadListingDefaultsForBranch(token, repoFullName, select.value);
+
+    if (rebuildSelect) {
+      const fallback = document.getElementById('ghBranch')?.value.trim() || document.getElementById('ghBaseBranch')?.value || '';
+      populateSelect(rebuildSelect, fallback || (document.getElementById('ghBaseBranch')?.value || ''));
+      if (!rebuildSelect.value && document.getElementById('ghBaseBranch')?.value) rebuildSelect.value = document.getElementById('ghBaseBranch').value;
+    }
   } catch (e) {
-    select.innerHTML = '<option value="">❌ Failed to load branches</option>';
+    if (baseSelect) baseSelect.innerHTML = '<option value="">❌ Failed to load branches</option>';
+    if (rebuildSelect) rebuildSelect.innerHTML = '<option value="">❌ Failed to load branches</option>';
   }
-  select.disabled = false;
+  if (baseSelect) baseSelect.disabled = false;
+  if (rebuildSelect) rebuildSelect.disabled = false;
 }
 
 // Persist GitHub settings
@@ -5881,8 +5902,8 @@ function getBranchRebuildRequest() {
   const token = document.getElementById('ghToken').value.trim();
   const repo = (document.getElementById('ghRepo')?.value || '').trim() || (document.getElementById('ghRepoManual')?.value || '').trim();
   const workflow = document.getElementById('ghWorkflow').value;
-  const branchInput = document.getElementById('rebuildBranchInput');
-  const branch = (branchInput?.value || document.getElementById('ghBranch').value || '').trim() || getAppEntries(true)[0]?.pkg || '';
+  const rebuildSelect = document.getElementById('rebuildBranchSelect');
+  const branch = (rebuildSelect?.value || document.getElementById('ghBranch').value || '').trim() || getAppEntries(true)[0]?.pkg || '';
   if (!token || !repo || !branch || workflow === 'setup-variant.yml') return null;
 
   const publishToPlay = document.getElementById('publishFlutterPlay')?.checked ? 'true' : 'false';
