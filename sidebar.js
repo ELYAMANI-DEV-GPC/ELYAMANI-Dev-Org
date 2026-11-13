@@ -3651,10 +3651,10 @@ async function loadRepoSelector(token) {
       opt.textContent = `${r.full_name}${r.private ? ' 🔒' : ''}`;
       select.appendChild(opt);
     });
-    // Restore saved value if it exists
-    if (savedRepo && select.querySelector(`option[value="${savedRepo}"]`)) {
-      select.value = savedRepo;
-      loadBranchSelector(token, savedRepo);
+    const finalRepo = (savedRepo && select.querySelector(`option[value="${savedRepo}"]`)) ? savedRepo : (select.value || '');
+    if (finalRepo) {
+      select.value = finalRepo;
+      loadBranchSelector(token, finalRepo);
     }
   } catch (e) {
     select.innerHTML = '<option value="">❌ Failed to load repos</option>';
@@ -3662,7 +3662,6 @@ async function loadRepoSelector(token) {
   select.disabled = false;
 }
 
-// Populate branch dropdown
 async function loadBranchSelector(token, repoFullName) {
   const baseSelect = document.getElementById('ghBaseBranch');
   const rebuildSelect = document.getElementById('rebuildBranchSelect');
@@ -3710,8 +3709,10 @@ async function loadBranchSelector(token, repoFullName) {
     }
 
     if (rebuildSelect) {
-      const fallback = document.getElementById('ghBranch')?.value.trim() || document.getElementById('ghBaseBranch')?.value || '';
-      populateSelect(rebuildSelect, fallback || (document.getElementById('ghBaseBranch')?.value || ''));
+      const repoBranch = document.getElementById('ghRepo')?.value?.trim() || document.getElementById('ghRepoManual')?.value?.trim() || repoFullName || '';
+      const selectedRepoBranch = repoBranch && repoBranch === repoFullName ? (document.getElementById('ghBaseBranch')?.value || '') : '';
+      const preferred = selectedRepoBranch || document.getElementById('ghBranch')?.value?.trim() || document.getElementById('ghBaseBranch')?.value || '';
+      populateSelect(rebuildSelect, preferred);
       if (!rebuildSelect.value && document.getElementById('ghBaseBranch')?.value) rebuildSelect.value = document.getElementById('ghBaseBranch').value;
     }
   } catch (e) {
@@ -3729,7 +3730,10 @@ document.addEventListener('DOMContentLoaded', () => {
     fields.forEach(f => { if (d[f]) document.getElementById(f).value = d[f]; });
     // Auto-load repos if token is saved
     if (d.ghToken) {
-      loadRepoSelector(d.ghToken);
+      loadRepoSelector(d.ghToken).finally(() => {
+        const activeRepo = (document.getElementById('ghRepo')?.value || '').trim() || (document.getElementById('ghRepoManual')?.value || '').trim();
+        if (activeRepo && d.ghToken) loadBranchSelector(d.ghToken, activeRepo);
+      });
     }
   });
 
@@ -3770,17 +3774,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Repo change: load branches
   const repoEl = document.getElementById('ghRepo');
+  const manualEl = document.getElementById('ghRepoManual');
   if (repoEl) {
+    const updateRepoCustomState = () => {
+      if (!manualEl) return;
+      const isCustom = repoEl.value === '__custom__';
+      manualEl.style.display = isCustom ? 'block' : 'none';
+      if (!isCustom) {
+        manualEl.value = '';
+      }
+    };
     repoEl.addEventListener('change', () => {
+      updateRepoCustomState();
+      if (repoEl.value === '__custom__') {
+        manualEl?.focus();
+        return;
+      }
       const val = repoEl.value;
       chrome.storage.local.set({ ghRepo: val });
       const token = document.getElementById('ghToken').value.trim();
       if (val && token) loadBranchSelector(token, val);
     });
+    updateRepoCustomState();
   }
 
   // Manual repo input: override select
-  const manualEl = document.getElementById('ghRepoManual');
   if (manualEl) {
     manualEl.addEventListener('change', () => {
       const val = manualEl.value.trim();
@@ -3797,6 +3815,19 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({ ghRepo: val });
         const token = document.getElementById('ghToken').value.trim();
         if (token) loadBranchSelector(token, val);
+      }
+    });
+  }
+
+  const rebuildBranchSelect = document.getElementById('rebuildBranchSelect');
+  if (rebuildBranchSelect) {
+    rebuildBranchSelect.addEventListener('change', () => {
+      const repo = (document.getElementById('ghRepo')?.value || '').trim() || (document.getElementById('ghRepoManual')?.value || '').trim();
+      if (repo) {
+        const selected = rebuildBranchSelect.value;
+        if (selected) {
+          document.getElementById('ghBranch').value = selected;
+        }
       }
     });
   }

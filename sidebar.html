@@ -376,9 +376,10 @@
       <div>
         <label>Repository (owner/repo)</label>
         <select id="ghRepo" style="width:100%;padding:6px;border-radius:4px;border:1px solid #ccc">
+          <option value="__custom__">-- Other repository --</option>
           <option value="GPC-Shared/68d9d0fa1299230338c8563a" selected>GPC-Shared/68d9d0fa1299230338c8563a 🔒</option>
         </select>
-        <input type="text" id="ghRepoManual" placeholder="or type owner/repo" style="margin-top:4px;font-size:11px;width:100%;padding:4px;border-radius:4px;border:1px solid #ddd;color:#666">
+        <input type="text" id="ghRepoManual" placeholder="or type owner/repo" style="margin-top:4px;font-size:11px;width:100%;padding:4px;border-radius:4px;border:1px solid #ddd;color:#666;display:none">
       </div>
       <div>
         <label>Branch <small style="color:#888">(= package name)</small></label>
